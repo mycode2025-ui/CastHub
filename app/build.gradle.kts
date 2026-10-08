@@ -22,6 +22,14 @@ val appVersionName = "1.4.1"
 val repoOwner = "mycode2025-ui"
 val repoName = "CastHub"
 
+// 首选源：GITEE 或 GITHUB。
+//
+// 两个源**都会查**（只看一个会漏判，两站的发布节奏并不一致），这里只决定谁优先：
+// 版本信息优先取谁的，以及几 MB 的安装包先从哪个站下。
+// 默认 Gitee 的理由是国内网络的实际情况：GitHub 未鉴权接口每出口 IP 每小时仅 60 次
+// （实测共享出口上长期为 0，检查直接 403），而且下载时 Gitee 的出口带宽明显更宽裕。
+val preferredSource = "GITEE"
+
 // ───────────────────────── 发布签名 ─────────────────────────
 //
 // keystore.properties 与 .jks **不进版本库**（见 .gitignore）。
@@ -49,6 +57,7 @@ android {
 
         buildConfigField("String", "UPDATE_REPO_OWNER", "\"$repoOwner\"")
         buildConfigField("String", "UPDATE_REPO_NAME", "\"$repoName\"")
+        buildConfigField("String", "UPDATE_PREFERRED_SOURCE", "\"$preferredSource\"")
     }
 
     signingConfigs {

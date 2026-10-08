@@ -49,6 +49,12 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var app: CastHubApplication
 
+    /**
+     * 升级流程。做成字段而不是每次 `UpdateFlow(this)`：
+     * 它持有"因缺权限而中断的升级"这类跨 onResume 的状态，新建实例会把状态丢掉。
+     */
+    private lateinit var updateFlow: UpdateFlow
+
     // 待机屏
     private lateinit var homeRoot: View
     private lateinit var tvDeviceName: TextView
@@ -130,6 +136,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         app = application as CastHubApplication
+        updateFlow = UpdateFlow(this)
 
         bindViews()
         setupSurface()
@@ -143,13 +150,15 @@ class MainActivity : AppCompatActivity() {
         // 冷启动静默检查有没有新版本。
         // 受节流约束（默认 6 小时内不重复查），且只在确实有新版本、当前也没在投屏时才会打扰用户 ——
         // 检查失败一律静默，避免离线设备每次开机都弹一个"检查更新失败"。
-        UpdateFlow(this).checkOnLaunch()
+        updateFlow.checkOnLaunch()
     }
 
     override fun onResume() {
         super.onResume()
         // 设置页可能改过设备名，回到前台时刷新一次
         renderHome()
+        // 用户去系统设置里开了「安装未知应用」后返回，接着把升级走完
+        updateFlow.onHostResumed()
     }
 
     override fun onDestroy() {

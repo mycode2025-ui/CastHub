@@ -69,6 +69,15 @@ class UpdateChecker(
     private val owner: String,
     private val repo: String,
     private val currentVersionName: String,
+    /**
+     * 首选数据源：版本信息以此源优先，下载地址也排在降级顺序的第一位。
+     *
+     * 默认 Gitee 不是随手定的 —— GitHub 未鉴权接口是「每出口 IP 每小时 60 次」，
+     * 国内用户的实际经验往往是"GitHub 取不到、Gitee 好好的"；
+     * 而一旦要下载几 MB 的安装包，出口带宽更是决定性的。
+     * 两个源**都会查**，[preferredSource] 只决定谁优先，不决定谁被跳过。
+     */
+    private val preferredSource: UpdateSource = UpdateSource.GITEE,
     private val fetcher: TextFetcher = UrlConnectionFetcher(),
 ) {
 
@@ -91,8 +100,11 @@ class UpdateChecker(
             )
         }
 
-        val result = decide(outcomes, current, currentVersionName)
-        CastLogger.i(TAG, "检查更新结论：${result::class.simpleName}")
+        val result = decide(outcomes, current, currentVersionName, preferredSource)
+        CastLogger.i(
+            TAG,
+            "检查更新结论：${result::class.simpleName}（首选源 ${preferredSource.label}）",
+        )
         return result
     }
 
@@ -144,13 +156,14 @@ class UpdateChecker(
 /**
  * 汇总各源结论，选出升级候选。
  *
- * 做成独立的纯函数：这段判断（哪个源可用、版本谁高、APK 从哪取）
+ * 做成独立的纯函数：这段判断（哪个源可用、版本谁高、APK 从哪取、下载该试哪个地址）
  * 是升级功能里最容易出错的部分，必须能脱离网络直接单测。
  */
 internal fun decide(
     outcomes: List<SourceOutcome>,
     current: Version,
     currentVersionName: String,
+    preferredSource: UpdateSource = UpdateSource.GITEE,
 ): UpdateCheckResult {
     val usable = outcomes.filter { it.error == null }
     val warnings = outcomes.filter { it.error != null }
@@ -168,7 +181,10 @@ internal fun decide(
         return UpdateCheckResult.UpToDate(currentVersionName, latestTag = null, warnings = warnings)
     }
 
-    // 同版本时优先带 APK 的那条：能直接下载比停在网页上好
+    // 同版本时优先带 APK 的那条：能直接下载比停在网页上好；
+    // 版本与是否带包都相同时才按 priority 决出主源与备源。
+    // 这里**只比到"版本 > 是否有包"这两级**，同级的取舍交给下面的排序 ——
+    // 把优先级也塞进比较器会让规则散在两处，读的人无法确定到底谁说了算。
     val best = all.maxWithOrNull(
         compareBy<ReleaseInfo> { it.version }
             .thenBy { if (it.apk != null) 1 else 0 },
@@ -178,21 +194,49 @@ internal fun decide(
         return UpdateCheckResult.UpToDate(currentVersionName, latestTag = best.tag, warnings = warnings)
     }
 
-    // APK 允许取自另一个源：两站的 Release 常不同步，
-    // "Gitee 已发新版本但没挂包、GitHub 挂了包"就是这种情况
-    val sameVersion = all.filter { it.version == best.version && it.apk != null }
-    val apkFrom = sameVersion.firstOrNull { it.source == best.source } ?: sameVersion.firstOrNull()
+    // 升级目标版本下所有可用的取包渠道，按 priority 排序：
+    // 第一个是主选、其余是"主选下不动时换过去"的降级项。
+    // 允许取自另一个源：两站的 Release 常不同步，
+    // "Gitee 已发新版本但没挂包、GitHub 挂了包"就是这种情况。
+    val channels = all
+        .filter { it.version == best.version }
+        .distinctBy { it.source }
+        .sortedWith(
+            compareByDescending<ReleaseInfo> { if (it.apk != null) 1 else 0 }
+                .thenByDescending { it.source.priority },
+        )
+
+    // 版本信息优先取首选源的那条；首选源没有这个版本时才落到实际选中的那条。
+    val primary = channels.firstOrNull { it.source == preferredSource } ?: best
+    val primaryApk = channels.firstOrNull { it.apk != null }
 
     return UpdateCheckResult.UpdateAvailable(
         candidate = UpdateCandidate(
-            release = best,
-            apkUrl = apkFrom?.apk?.url,
-            apkSource = apkFrom?.source,
-            apkSizeBytes = apkFrom?.apk?.sizeBytes ?: 0L,
+            release = primary,
+            apkUrl = primaryApk?.apk?.url,
+            apkSource = primaryApk?.source,
+            apkSizeBytes = primaryApk?.apk?.sizeBytes ?: 0L,
+            apkFallbacks = channels.filter { it.apk != null && it !== primaryApk }
+                .map { ApkLocation(it.source, it.apk!!.url, it.apk.sizeBytes) },
+            preferredSource = preferredSource,
         ),
         currentVersionName = currentVersionName,
         warnings = warnings,
     )
+}
+
+/**
+ * 下载地址的降级顺序。
+ *
+ * 只用来生成"下载失败后该换哪个地址重试"的提示，**不做自动重试**：
+ * 一个几 MB 的包下到一半失败再自动重来一遍，在电视上的观感像是卡死了。
+ * 让用户看着提示自己决定，比脚本自作主张更容易理解。
+ */
+internal fun apkTryOrder(candidate: UpdateCandidate): List<ApkLocation> {
+    val primary = candidate.apkUrl?.let {
+        ApkLocation(candidate.apkSource ?: candidate.preferredSource, it, candidate.apkSizeBytes)
+    }
+    return listOfNotNull(primary) + candidate.apkFallbacks
 }
 
 /** 两站接口地址。 */

@@ -80,6 +80,7 @@
     <string name="update_from">当前版本：v%1$s\n新版本：%2$s</string>
     <string name="update_source">版本信息来自 %1$s</string>
     <string name="update_apk_from">安装包来自 %1$s</string>
+    <string name="update_primary_source_note">（优先源为 %1$s，另一站版本更高时取更高的那个）</string>
     <string name="update_apk_size">安装包大小：%1$s</string>
     <string name="update_release_notes">更新说明：</string>
     <string name="update_notes_truncated">（仅显示开头部分，完整说明见发布页）</string>
@@ -93,12 +94,15 @@
     <string name="action_open_release_page">打开发布页</string>
     <string name="action_install">安装</string>
     <string name="action_go_settings">去设置</string>
+    <string name="action_retry_from_other">改用 %1$s 重试</string>
 
     <string name="update_downloading_title">下载中</string>
     <string name="update_downloading">%1$s / %2$s</string>
     <string name="update_downloading_unknown">已下载 %1$s</string>
     <string name="update_download_failed_title">下载失败</string>
     <string name="update_download_failed_hint">可以打开发布页，用浏览器手动下载安装包。</string>
+    <!-- 同一个版本在另一站也挂着安装包，主源下不动时换过去 -->
+    <string name="update_download_failed_switch">同一个版本在 %1$s 上也有安装包，可以换个源再试。</string>
     <string name="update_no_installer">系统没有可用的安装程序，请打开发布页手动下载。</string>
     <string name="update_no_browser">没有可打开链接的应用。发布页地址：\n%1$s</string>
 

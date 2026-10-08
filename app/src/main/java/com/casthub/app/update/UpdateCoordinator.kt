@@ -6,9 +6,11 @@ import com.casthub.core.CastLogger
 import com.casthub.core.update.UpdateCheckResult
 import com.casthub.core.update.UpdateChecker
 import com.casthub.core.update.UpdatePrefs
+import com.casthub.core.update.UpdateSource
 
 /**
- * 升级检测的应用层入口：把"仓库坐标 + 本机版本"与检测器接起来，并管理节流与忽略状态。
+ * 升级检测的应用层入口：把"仓库坐标 + 本机版本 + 首选源"与检测器接起来，
+ * 并管理节流与忽略状态。
  *
  * 仓库坐标来自 `BuildConfig`（由 `app/build.gradle.kts` 注入），
  * 因此换仓库不需要改这里。
@@ -19,14 +21,19 @@ class UpdateCoordinator(context: Context) {
 
     val currentVersionName: String get() = BuildConfig.VERSION_NAME
 
-    /** 仓库主页，用于"打不开浏览器"这类兜底展示。 */
-    val repoUrl: String
-        get() = "https://github.com/${BuildConfig.UPDATE_REPO_OWNER}/${BuildConfig.UPDATE_REPO_NAME}"
+    /** 首选源：版本信息以此源优先，安装包也从这里先下。构建期可配。 */
+    private val preferredSource = BuildConfig.UPDATE_PREFERRED_SOURCE
+        .let { UpdateSource.entries.firstOrNull { e -> e.name == it } }
+        ?: UpdateSource.GITEE
+
+    /** 首选源的仓库主页，用于打不开浏览器 / 没有安装包时的兜底。 */
+    val repoUrl: String get() = "${preferredSource.baseUrl}/${BuildConfig.UPDATE_REPO_OWNER}/${BuildConfig.UPDATE_REPO_NAME}"
 
     private fun newChecker() = UpdateChecker(
         owner = BuildConfig.UPDATE_REPO_OWNER,
         repo = BuildConfig.UPDATE_REPO_NAME,
         currentVersionName = BuildConfig.VERSION_NAME,
+        preferredSource = preferredSource,
     )
 
     /** 设置页手动触发的检查：不受节流限制，结论一律反馈给用户。 */
@@ -34,7 +41,7 @@ class UpdateCoordinator(context: Context) {
         CastLogger.i(
             TAG,
             "手动检查更新：${BuildConfig.UPDATE_REPO_OWNER}/${BuildConfig.UPDATE_REPO_NAME}，" +
-                "当前 v${BuildConfig.VERSION_NAME}",
+                "当前 v${BuildConfig.VERSION_NAME}，首选源 ${preferredSource.label}",
         )
         val result = newChecker().check()
         prefs.markChecked()

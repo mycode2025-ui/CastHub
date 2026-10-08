@@ -16,6 +16,13 @@ local.properties
 *.keystore
 keystore.properties
 
+# ───────────────────────── Gitee 发布令牌：绝不入库 ─────────────────────────
+#
+# 发布脚本从仓库外的 D:/BatteryMonitor/CastHub/.gitee_token 读（默认位置，本就在库外），
+# 但也接受放在仓库根；这里一并忽略，避免有人顺手放在根目录后误提交。
+# 令牌泄露等价于别人可以以你的名义建仓、发 Release。
+.gitee_token
+
 # ───────────────────────── IDE ─────────────────────────
 .idea/
 *.iml

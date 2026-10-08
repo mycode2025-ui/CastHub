@@ -12,7 +12,8 @@
 那种错在用户侧表现为"提示有新版本、装完还是旧版本"，极难排查。
 
 Gitee 的 token 从环境变量 GITEE_TOKEN 或文件 D:/BatteryMonitor/CastHub/.gitee_token 读，
-不写进任何入库文件。
+不写进任何入库文件。**只做发布不会自动建仓**：仓库要先在 Gitee 网页端建好（公开、同名），
+否则脚本只会报 404。想自动建仓加 --create-gitee-repo（需令牌有 projects 权限）。
 """
 from __future__ import annotations
 
@@ -148,6 +149,108 @@ def gitee_find_release(token: str, tag: str) -> dict | None:
     return None
 
 
+def gitee_has_asset(release: dict | None, name: str) -> bool:
+    """该 Release 上是否已经挂了同名附件。"""
+    if not release:
+        return False
+    assets = release.get("assets") or []
+    return any(a.get("name") == name for a in assets)
+
+
+def gitee_delete_release(token: str, release_id: int) -> bool:
+    status, text = gitee_request(
+        "DELETE", f"/api/v5/repos/{GITEE_REPO}/releases/{release_id}", token,
+    )
+    if status in (200, 204):
+        return True
+    print(f"  ✗ 删除既有 Release 失败（HTTP {status}）：{text[:300]}")
+    return False
+
+
+def gitee_repo_exists(token: str) -> tuple[bool, str]:
+    """检查远端仓库是否已存在。返回 (是否存在, 说明)。
+
+    为什么不直接让上传报错就完事：Gitee 对"仓库不存在"和"令牌权限不足"都可能回
+    404/403，用户看到一句 HTTP 404 根本不知道该去网页端建仓还是去改令牌权限。
+    这里单独探一次，把两种原因分开说清楚。
+    """
+    status, text = gitee_request(
+        "GET", f"/api/v5/repos/{GITEE_REPO}?access_token={token}", token,
+    )
+    if status == 200:
+        return True, ""
+    if status in (401,):
+        return False, "令牌无效或已过期（HTTP 401）"
+    if status == 403:
+        return False, "令牌权限不足（HTTP 403），需要勾选 projects 权限"
+    if status == 404:
+        return False, "Gitee 上没有这个仓库（HTTP 404）"
+    return False, f"探测仓库失败（HTTP {status}）"
+
+
+def ensure_repo_public(token: str) -> bool:
+    """复查仓库是公开的，不是就改过来。
+
+    为什么必须复查：建仓接口会**无视** `private=false` 把仓库建成私有（实测：
+    传了 `"private": False`，建出来 `private=true`）。不复查的后果极其隐蔽 ——
+    私有仓库对**匿名**接口就是 404，而应用内升级检测恰恰是匿名的，
+    于是 App 稳定报「仓库不存在或未公开」，脚本却显示"发布成功"：
+    一次"成功"的发布实际等于没发，而且从两边的日志都看不出问题。
+
+    改公开要走 PATCH，且**必须带 name**（不带会回 400 `name is missing`）。
+    """
+    name = GITEE_REPO.split("/")[-1]
+    status, text = gitee_request(
+        "GET", f"/api/v5/repos/{GITEE_REPO}?access_token={token}", token,
+    )
+    if status == 200:
+        info = json.loads(text)
+        if not info.get("private", False):
+            print("  可见性：公开 ✓")
+            return True
+        print("  ⚠️ 仓库当前是私有的（匿名接口取不到，应用内升级检测会失败），正在改为公开")
+
+    status, text = gitee_request(
+        "PATCH", f"/api/v5/repos/{GITEE_REPO}", token,
+        body={"name": name, "private": False},
+    )
+    if status not in (200, 201):
+        print(f"  ✗ 改为公开失败（HTTP {status}）：{text[:300]}")
+        return False
+
+    # 改完再确认一次：Gitee 的 PATCH 即便返回 200 也不保证当场生效
+    status, text = gitee_request(
+        "GET", f"/api/v5/repos/{GITEE_REPO}?access_token={token}", token,
+    )
+    if status == 200 and not json.loads(text).get("private", False):
+        print("  可见性：已改为公开 ✓")
+        return True
+    print("  ✗ 改为公开后复查仍不是公开状态")
+    return False
+
+
+def gitee_create_repo(token: str) -> bool:
+    """建一个公开仓库。只在显式传入 --create-gitee-repo 时调用 —— 建仓是带副作用
+    的远端操作，不该在每次发布时隐式发生。"""
+    print(f"  创建仓库 {GITEE_REPO}")
+    status, text = gitee_request(
+        "POST", "/api/v5/user/repos", token,
+        body={
+            "name": GITEE_REPO.split("/")[-1],
+            "description": "Android TV 多协议投屏接收端（DLNA/UPnP DMR + AirPlay）",
+            "private": False,
+            "has_issues": True,
+            "has_wiki": False,
+            "auto_init": False,
+        },
+    )
+    if status not in (200, 201):
+        print(f"  ✗ 建仓失败（HTTP {status}）：{text[:300]}")
+        return False
+    print("  仓库已创建")
+    return ensure_repo_public(token)
+
+
 # ───────────────────────── 发布步骤 ─────────────────────────
 
 def build() -> Path:
@@ -191,6 +294,38 @@ def render_notes(source: Path, version: str, apk: Path, dry_run: bool) -> Path:
     return out
 
 
+def ensure_gitee_repo(dry_run: bool, create_repo: bool) -> bool:
+    """确认 Gitee 仓库存在，**必须在推 tag 之前调用**。
+
+    顺序是这个函数的全部意义：发 Release 要指向一个 tag，而 tag 只存在于推上去的提交上。
+    先推后建仓的话，推送会先失败（仓库不存在），随后建仓成功但仓库里没有那个 tag，
+    发 Release 就报「创建标签失败」（实测 HTTP 400）—— 看起来像 Gitee 抽风，
+    其实是自己把两步做反了。
+    """
+    print(f"④ 确认 Gitee 仓库存在（{GITEE_REPO}）")
+    token = read_gitee_token()
+    if not token:
+        print("  ✗ 找不到 Gitee 私人令牌，Gitee 侧本次不发布。")
+        return False
+    if dry_run:
+        print("  将确认仓库存在；不存在时按 --create-gitee-repo 决定是否创建")
+        return True
+
+    exists, why = gitee_repo_exists(token)
+    if exists:
+        print("  仓库已存在")
+        # 已有的仓库也要复查可见性：之前可能是私有建的，那样升级检测一样取不到
+        return ensure_repo_public(token)
+
+    print(f"  ✗ {why}")
+    if "404" not in why:
+        return False
+    if not create_repo:
+        print("    需要先在 Gitee 上有这个仓库；或用 --create-gitee-repo 让脚本建。")
+        return False
+    return gitee_create_repo(token)
+
+
 def sync_remotes(version: str, dry_run: bool) -> list[str]:
     """推送**当前分支**与 tag 到所有远端，返回推送成功的远端。
 
@@ -202,7 +337,7 @@ def sync_remotes(version: str, dry_run: bool) -> list[str]:
     tag = f"v{version}"
     branch = run("git", "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
     remotes = [r.strip() for r in run("git", "remote").stdout.split() if r.strip()]
-    print(f"④ 推送分支 {branch} 与 tag {tag}")
+    print(f"⑤ 推送分支 {branch} 与 tag {tag}")
     if not remotes:
         raise SystemExit("  没有任何远端，无法推送")
     if dry_run:
@@ -231,7 +366,7 @@ def sync_remotes(version: str, dry_run: bool) -> list[str]:
 def publish_github(version: str, apk: Path, notes: Path, dry_run: bool) -> bool:
     tag = f"v{version}"
     title = f"CastHub {version}"
-    print(f"⑤ GitHub Release（{GH_REPO}）")
+    print(f"⑥ GitHub Release（{GH_REPO}）")
     if dry_run:
         print(f"  将创建/更新 Release {tag} 并上传 {apk.name}")
         return True
@@ -256,9 +391,12 @@ def publish_github(version: str, apk: Path, notes: Path, dry_run: bool) -> bool:
 
 def publish_gitee(version: str, apk: Path, notes: Path, dry_run: bool) -> bool:
     """@return 是否成功发布。拿不到令牌时返回 False 而不是中断 ——
-    GitHub 那边可能已经发好了，把整次发布判为失败会掩盖这个事实。"""
+    GitHub 那边可能已经发好了，把整次发布判为失败会掩盖这个事实。
+
+    建仓不在这里做：仓库要早于推 tag 存在，见 [ensure_gitee_repo]。
+    """
     tag = f"v{version}"
-    print(f"⑥ Gitee Release（{GITEE_REPO}）")
+    print(f"⑦ Gitee Release（{GITEE_REPO}）")
     token = read_gitee_token()
     if not token:
         print("  ✗ 找不到 Gitee 私人令牌，跳过。")
@@ -269,8 +407,23 @@ def publish_gitee(version: str, apk: Path, notes: Path, dry_run: bool) -> bool:
         print(f"  将创建/更新 Release {tag} 并上传 {apk.name}")
         return True
 
+    exists, why = gitee_repo_exists(token)
+    if not exists:
+        print(f"  ✗ {why}（仓库应在第 ④ 步就绪，请检查上一步的输出）")
+        return False
+
     body = notes.read_text(encoding="utf-8")
     existing = gitee_find_release(token, tag)
+    if gitee_has_asset(existing, apk.name):
+        # Gitee 的附件接口**没有覆盖语义**：同名的文件会再传一份（实测跑两次就出现
+        # 两条同名 APK），而附件对象只给 name 与 url、不给 id，无法单独删除。
+        # 所以重发同一版本时把整条 Release 重建，保证附件只有一份 ——
+        # 否则 Release 页上会挂两个同名包，用户分不清该下哪个。
+        print(f"  已存在同名安装包，重建该 Release（Gitee 附件不可覆盖，只能整条重建）")
+        if not gitee_delete_release(token, existing["id"]):
+            return False
+        existing = None
+
     if existing:
         release_id = existing["id"]
         status, text = gitee_request(
@@ -311,6 +464,8 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="只打印将执行的动作")
     parser.add_argument("--notes", default="docs/RELEASE_NOTES.md", help="人工撰写的发布说明")
     parser.add_argument("--skip-build", action="store_true", help="复用已有构建产物")
+    parser.add_argument("--only-gitee", action="store_true", help="只发 Gitee，跳过 GitHub（补发场景）")
+    parser.add_argument("--create-gitee-repo", action="store_true", help="Gitee 仓库不存在时自动创建")
     args = parser.parse_args()
 
     code, version = read_version()
@@ -331,8 +486,14 @@ def main() -> int:
         apk = stage(version)
 
     notes = render_notes(ROOT / args.notes, version, apk, args.dry_run)
+    # 建仓必须早于推 tag，否则 Gitee 上建好仓库却没有那个 tag，发 Release 会失败
+    ensure_gitee_repo(args.dry_run, args.create_gitee_repo)
     sync_remotes(version, args.dry_run)
-    github_ok = publish_github(version, apk, notes, args.dry_run)
+    if args.only_gitee:
+        print("⑥ GitHub Release（SKIP --only-gitee）")
+        github_ok = True
+    else:
+        github_ok = publish_github(version, apk, notes, args.dry_run)
     gitee_ok = publish_gitee(version, apk, notes, args.dry_run)
 
     print()

@@ -17,6 +17,7 @@ import com.casthub.core.CastLogger
 import com.casthub.core.update.ReleaseNotes
 import com.casthub.core.update.UpdateCandidate
 import com.casthub.core.update.UpdateCheckResult
+import com.casthub.core.update.UpdateSource
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.io.File
@@ -41,7 +42,25 @@ class UpdateFlow(private val activity: AppCompatActivity) {
     private var checking = false
     private var downloadJob: Job? = null
 
+    /**
+     * 因缺「安装未知应用」权限而中断的升级，等用户从设置页回来再继续。
+     * 进入下载时会清空，避免"用户自己没点过却被自动下载"。
+     */
+    private var pendingUpgrade: UpdateCandidate? = null
+
     // ─────────────────────── 检查 ───────────────────────
+
+    /**
+     * 界面 resuming 时调用。
+     *
+     * 用途单一：用户去系统设置里打开「安装未知应用」后返回，自动接着刚才被打断的升级。
+     * 放在 MainActivity 的 onResume 里而不是注册 ActivityResultLauncher ——
+     * 「安装未知应用」是跳到系统设置页，没有稳定的 result contract 可依赖。
+     */
+    fun onHostResumed() {
+        if (checking) return
+        resumePendingUpgrade()
+    }
 
     /**
      * 手动检查（设置页）。
@@ -142,6 +161,17 @@ class UpdateFlow(private val activity: AppCompatActivity) {
                 append('\n')
                 append(activity.getString(R.string.update_apk_size, formatSize(candidate.apkSizeBytes)))
             }
+            // 两站的版本信息不一致时说明为什么选了这一个。
+            // 不说的话用户可能去另一站看到"版本对不上"，以为检查错了。
+            if (candidate.release.source != candidate.preferredSource) {
+                append('\n')
+                append(
+                    activity.getString(
+                        R.string.update_primary_source_note,
+                        candidate.preferredSource.label,
+                    ),
+                )
+            }
             if (candidate.apkUrl == null) {
                 append("\n\n")
                 append(activity.getString(R.string.update_no_apk))
@@ -198,24 +228,41 @@ class UpdateFlow(private val activity: AppCompatActivity) {
         }
         // 先要授权再下载：没授权就下载等于白耗流量
         if (!downloader.canInstallPackages()) {
-            askInstallPermission()
+            askInstallPermission(candidate)
             return
         }
-        download(candidate, apkUrl)
+        download(candidate, apkUrl, fromSource = candidate.apkSource)
     }
 
-    private fun askInstallPermission() {
+    private fun askInstallPermission(candidate: UpdateCandidate) {
         simpleDialog(R.string.update_need_permission_title)
             .setMessage(R.string.update_need_permission_message)
             .setPositiveButton(R.string.action_go_settings) { _, _ ->
                 runCatching { activity.startActivity(downloader.unknownAppSourcesSettingsIntent()) }
                     .onFailure { CastLogger.w(TAG, "无法打开「安装未知应用」设置页", it) }
+                // 去授权这一趟回来还得再点一次"立即升级"，把候选留住，
+                // 用户不必重新检查一遍（也省掉可能撞上的 GitHub 限流）
+                pendingUpgrade = candidate
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
     }
 
-    private fun download(candidate: UpdateCandidate, apkUrl: String) {
+    /**
+     * 从授权页返回后继续升级。
+     *
+     * 只在"刚才确实是因为缺权限而中断"时才继续 —— [pendingUpgrade] 在下载真正开始时清空，
+     * 否则用户从设置页回来后会被一个自己没请求过的下载吓一跳。
+     */
+    private fun resumePendingUpgrade() {
+        val pending = pendingUpgrade ?: return
+        if (!downloader.canInstallPackages()) return
+        pendingUpgrade = null
+        CastLogger.i(TAG, "已获得安装权限，继续升级 ${pending.release.tag}")
+        startUpgrade(pending)
+    }
+
+    private fun download(candidate: UpdateCandidate, apkUrl: String, fromSource: UpdateSource?) {
         val holder = buildProgressHolder()
         holder.message.text = activity.getString(
             R.string.update_downloading,
@@ -228,6 +275,7 @@ class UpdateFlow(private val activity: AppCompatActivity) {
             .setNegativeButton(android.R.string.cancel, null)
             .show()
 
+        pendingUpgrade = null
         downloadJob?.cancel()
         downloadJob = activity.lifecycleScope.launch {
             var cancelledByUser = false
@@ -264,22 +312,8 @@ class UpdateFlow(private val activity: AppCompatActivity) {
                     CastLogger.i(TAG, "用户取消了下载")
                     return@launch
                 }
-                CastLogger.w(TAG, "下载安装包失败", t)
-                if (alive()) {
-                    simpleDialog(R.string.update_download_failed_title)
-                        .setMessage(
-                            buildString {
-                                append(t.message ?: t.javaClass.simpleName)
-                                append("\n\n")
-                                append(activity.getString(R.string.update_download_failed_hint))
-                            },
-                        )
-                        .setPositiveButton(R.string.action_open_release_page) { _, _ ->
-                            openPage(candidate.release.pageUrl)
-                        }
-                        .setNegativeButton(android.R.string.cancel, null)
-                        .show()
-                }
+                CastLogger.w(TAG, "下载安装包失败（来源 ${fromSource?.label ?: "未知"}）", t)
+                if (alive()) showDownloadFailure(candidate, fromSource, t)
                 return@launch
             }
 
@@ -326,6 +360,60 @@ class UpdateFlow(private val activity: AppCompatActivity) {
                 }
             }
         }
+    }
+
+    /**
+     * 下载失败时的处理：**主源失败就提示换另一站重试**。
+     *
+     * 为什么值得单独做这一步：版本信息与安装包可能来自不同站，而 Gitee 的附件下载
+     * 在国内偶尔会抽风。此时若只甩一句"下载失败"加一个发布页链接，
+     * 用户明明手上有另一个可用的地址却用不上 —— 那就等于"有新版本但装不了"。
+     *
+     * 只提示、不自动重试：几 MB 的包下到一半失败再自动重来一遍，
+     * 在电视上看起来像卡死，用户无法判断该不该继续等。
+     */
+    private fun showDownloadFailure(
+        candidate: UpdateCandidate,
+        fromSource: UpdateSource?,
+        error: Throwable,
+    ) {
+        // 当前这个地址来自哪一站。用调用方传来的实际来源，而不是 candidate.apkSource ——
+        // 用户可能已经换过源重试过一次，此时 candidate.apkSource 还是最初的，会把降级项算错。
+        val current = fromSource ?: candidate.apkSource ?: candidate.preferredSource
+        val fallback = candidate.apkFallbacks.firstOrNull { it.source != current }
+
+        val dialog = simpleDialog(R.string.update_download_failed_title)
+            .setMessage(
+                buildString {
+                    append(error.message ?: error.javaClass.simpleName)
+                    append("\n\n")
+                    if (fallback != null) {
+                        append(
+                            activity.getString(
+                                R.string.update_download_failed_switch,
+                                fallback.source.label,
+                            ),
+                        )
+                    } else {
+                        append(activity.getString(R.string.update_download_failed_hint))
+                    }
+                },
+            )
+
+        if (fallback != null) {
+            dialog.setPositiveButton(
+                activity.getString(R.string.action_retry_from_other, fallback.source.label),
+            ) { _, _ ->
+                CastLogger.i(TAG, "改用 ${fallback.source.label} 的安装包重试")
+                download(candidate, fallback.url, fallback.source)
+            }
+        } else {
+            dialog.setPositiveButton(R.string.action_open_release_page) { _, _ ->
+                openPage(candidate.release.pageUrl)
+            }
+        }
+
+        dialog.setNegativeButton(android.R.string.cancel, null).show()
     }
 
     private fun confirmInstall(apk: File) {

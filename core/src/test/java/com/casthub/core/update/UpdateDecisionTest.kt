@@ -29,6 +29,14 @@ class UpdateDecisionTest {
         currentVersionName = "1.4.0",
     )
 
+    /** 显式指定首选源的入口。 */
+    private fun decidePreferring(source: UpdateSource, vararg outcomes: SourceOutcome) = decide(
+        outcomes = outcomes.toList(),
+        current = current,
+        currentVersionName = "1.4.0",
+        preferredSource = source,
+    )
+
     @Test
     fun `两站都有新版本时取版本更高的那个`() {
         val result = decideWith(
@@ -185,5 +193,119 @@ class UpdateDecisionTest {
         )
         result as UpdateCheckResult.UpdateAvailable
         assertEquals("1.4.1", result.candidate.release.tag)
+    }
+
+    // ───────────────── Gitee 优先 ─────────────────
+
+    @Test
+    fun `两站同版本时以 Gitee 为准`() {
+        val result = decideWith(
+            SourceOutcome(UpdateSource.GITHUB, listOf(rel(UpdateSource.GITHUB, "v1.5.0"))),
+            SourceOutcome(UpdateSource.GITEE, listOf(rel(UpdateSource.GITEE, "v1.5.0"))),
+        )
+        result as UpdateCheckResult.UpdateAvailable
+        assertEquals(UpdateSource.GITEE, result.candidate.release.source)
+    }
+
+    @Test
+    fun `两站同版本都挂了包时优先下 Gitee 的包`() {
+        val result = decideWith(
+            SourceOutcome(
+                UpdateSource.GITHUB,
+                listOf(rel(UpdateSource.GITHUB, "v1.5.0", apk = "https://github.com/a/pkg.apk")),
+            ),
+            SourceOutcome(
+                UpdateSource.GITEE,
+                listOf(rel(UpdateSource.GITEE, "v1.5.0", apk = "https://gitee.com/a/pkg.apk")),
+            ),
+        )
+        result as UpdateCheckResult.UpdateAvailable
+        assertEquals("https://gitee.com/a/pkg.apk", result.candidate.apkUrl)
+        assertEquals(UpdateSource.GITEE, result.candidate.apkSource)
+        assertEquals(
+            "https://github.com/a/pkg.apk",
+            result.candidate.apkFallbacks.single().url,
+        )
+    }
+
+    @Test
+    fun `Gitee 版本更高时用 Gitee`() {
+        // 首选源只在**同版本**时起决定作用，不能因为"优先 Gitee"就无视 GitHub 上更高的版本
+        val result = decideWith(
+            SourceOutcome(UpdateSource.GITEE, listOf(rel(UpdateSource.GITEE, "v1.5.0"))),
+            SourceOutcome(UpdateSource.GITHUB, listOf(rel(UpdateSource.GITHUB, "v1.6.0"))),
+        )
+        result as UpdateCheckResult.UpdateAvailable
+        assertEquals("v1.6.0", result.candidate.release.tag)
+        assertEquals(UpdateSource.GITHUB, result.candidate.release.source)
+    }
+
+    @Test
+    fun `候选里带着首选源 供界面解释两站版本不一致的原因`() {
+        val result = decideWith(
+            SourceOutcome(UpdateSource.GITHUB, listOf(rel(UpdateSource.GITHUB, "v1.5.0"))),
+            SourceOutcome(UpdateSource.GITEE, listOf(rel(UpdateSource.GITEE, "v1.6.0"))),
+        )
+        result as UpdateCheckResult.UpdateAvailable
+        assertEquals(UpdateSource.GITEE, result.candidate.preferredSource)
+    }
+
+    @Test
+    fun `首选 Gitee 但只有 GitHub 挂了包时 仍用 GitHub 的包并把 Gitee 排前面等待降级`() {
+        // 反过来的情形（Gitee 挂了包、版本信息来自 GitHub）才是降级的主要场景：
+        // Gitee 附件下载抽风时要知道 GitHub 上也有同一个包
+        val result = decidePreferring(
+            UpdateSource.GITHUB,
+            SourceOutcome(UpdateSource.GITEE, listOf(rel(UpdateSource.GITEE, "v1.5.0"))),
+            SourceOutcome(
+                UpdateSource.GITHUB,
+                listOf(rel(UpdateSource.GITHUB, "v1.5.0", apk = "https://github.com/a/pkg.apk")),
+            ),
+        )
+        result as UpdateCheckResult.UpdateAvailable
+        assertEquals("https://github.com/a/pkg.apk", result.candidate.apkUrl)
+        assertEquals(UpdateSource.GITHUB, result.candidate.apkSource)
+    }
+
+    @Test
+    fun `只有一个源挂了包时不产生多余的降级项`() {
+        val result = decideWith(
+            SourceOutcome(UpdateSource.GITEE, listOf(rel(UpdateSource.GITEE, "v1.5.0"))),
+            SourceOutcome(
+                UpdateSource.GITHUB,
+                listOf(rel(UpdateSource.GITHUB, "v1.5.0", apk = "https://github.com/a/pkg.apk")),
+            ),
+        )
+        result as UpdateCheckResult.UpdateAvailable
+        assertTrue(result.candidate.apkFallbacks.isEmpty())
+        assertTrue(!result.candidate.hasFallbackApk)
+    }
+
+    @Test
+    fun `两站都挂了包时降级顺序按优先级排`() {
+        val candidate = (
+            decideWith(
+                SourceOutcome(
+                    UpdateSource.GITEE,
+                    listOf(rel(UpdateSource.GITEE, "v1.5.0", apk = "https://gitee.com/a/pkg.apk")),
+                ),
+                SourceOutcome(
+                    UpdateSource.GITHUB,
+                    listOf(rel(UpdateSource.GITHUB, "v1.5.0", apk = "https://github.com/a/pkg.apk")),
+                ),
+            ) as UpdateCheckResult.UpdateAvailable
+            ).candidate
+
+        val order = apkTryOrder(candidate)
+        assertEquals(UpdateSource.GITEE, order[0].source)
+        assertEquals(UpdateSource.GITHUB, order[1].source)
+        assertEquals(2, order.size)
+    }
+
+    @Test
+    fun `源优先级只有一处定义 —— Gitee 必须高于 GitHub`() {
+        // 这条断言看着像废话，但它是"Gitee 优先"这个策略的**唯一**守门人：
+        // 一旦有人把枚举里的 priority 调反，检查与下载两端会同时悄悄失效
+        assertTrue(UpdateSource.GITEE.priority > UpdateSource.GITHUB.priority)
     }
 }
