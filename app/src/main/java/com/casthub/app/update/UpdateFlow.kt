@@ -14,6 +14,7 @@ import androidx.lifecycle.lifecycleScope
 import com.casthub.app.CastHubApplication
 import com.casthub.app.R
 import com.casthub.core.CastLogger
+import com.casthub.core.update.ReleaseNotes
 import com.casthub.core.update.UpdateCandidate
 import com.casthub.core.update.UpdateCheckResult
 import kotlinx.coroutines.Job
@@ -141,18 +142,29 @@ class UpdateFlow(private val activity: AppCompatActivity) {
                 append('\n')
                 append(activity.getString(R.string.update_apk_size, formatSize(candidate.apkSizeBytes)))
             }
-            if (release.notes.isNotBlank()) {
-                append("\n\n")
-                append(activity.getString(R.string.update_release_notes))
-                append('\n')
-                append(release.notes.take(MAX_NOTES_CHARS))
-                if (release.notes.length > MAX_NOTES_CHARS) append("…")
-            }
             if (candidate.apkUrl == null) {
                 append("\n\n")
                 append(activity.getString(R.string.update_no_apk))
             }
+
+            // ⚠️ 告警必须紧跟头部信息。实测把追加在说明末尾是错的：
+            // 说明一长，告警就被顶到对话框可视区之外，"结论可能不完整"这件事
+            // 等于没告诉用户 —— 而它恰恰比更新说明更重要。
             appendWarnings(result.warnings)
+
+            if (release.notes.isNotBlank()) {
+                // 正文是网络来的任意 Markdown，原样显示会出现 ## / ** / 表格线
+                val notes = ReleaseNotes.toPlainText(release.notes, MAX_NOTES_LINES)
+                append("\n\n")
+                append(activity.getString(R.string.update_release_notes))
+                append('\n')
+                append(notes.text)
+                // 截断标记由清理器给出，不能在这里用行数反推（详见 ReleaseNotes.Plain 的说明）
+                if (notes.truncated) {
+                    append('\n')
+                    append(activity.getString(R.string.update_notes_truncated))
+                }
+            }
         }
 
         simpleDialog(R.string.update_available_title, release.tag)
@@ -411,7 +423,13 @@ class UpdateFlow(private val activity: AppCompatActivity) {
         const val TAG = "UpdateFlow"
         const val PROGRESS_MAX = 1000
 
-        /** 更新说明最多展示这么多字符：Release 正文可以很长，全塞进对话框会撑满屏幕。 */
-        const val MAX_NOTES_CHARS = 600
+        /**
+         * 更新说明最多展示这么多行。
+         *
+         * 按**行**而不是字符数限制：对话框的观感取决于占了几行，
+         * 而 Release 正文里的 Markdown 标记会把字符数撑得很虚。
+         * 8 行是实测值 —— 12 行时对话框几乎占满手机整屏，电视上更难看。
+         */
+        const val MAX_NOTES_LINES = 8
     }
 }

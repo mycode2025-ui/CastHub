@@ -9,6 +9,7 @@ import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.casthub.core.CastLogger
+import com.casthub.core.update.TrustedDownloadHosts
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -234,17 +235,16 @@ class ApkDownloader(context: Context) {
     /**
      * 只允许从受信域名下载。
      *
-     * 这是纵深防御的一层（真正的关口是签名校验）：Release 信息来自网络，
-     * 万一被指向第三方主机，这里直接拒绝，而不是乖乖把 APK 拉下来。
-     * GitHub 的 Release 资产会 302 到 objects.githubusercontent.com，所以后缀也要放行。
+     * 判断逻辑在 [TrustedDownloadHosts] 里（不依赖 Android，便于单测）——
+     * 这是纵深防御的一层，真正的关口是下载后的签名校验。
      */
     private fun requireTrustedUrl(url: String) {
         val uri = Uri.parse(url)
-        val scheme = uri.scheme?.lowercase()
-        if (scheme != "https") throw IOException("只允许 https 下载（收到 ${scheme ?: "无协议"}）")
-        val host = uri.host?.lowercase().orEmpty()
-        val trusted = TRUSTED_HOSTS.any { host == it || host.endsWith(".$it") }
-        if (!trusted) throw IOException("下载地址不在受信域名内：$host")
+        if (!TrustedDownloadHosts.isTrusted(uri.scheme, uri.host)) {
+            throw IOException(
+                "下载地址不被信任：${uri.scheme ?: "无协议"}://${uri.host ?: "无域名"}",
+            )
+        }
     }
 
     private companion object {
@@ -255,12 +255,5 @@ class ApkDownloader(context: Context) {
         const val CONNECT_TIMEOUT_MS = 10_000
         const val READ_TIMEOUT_MS = 30_000
         const val BUFFER_SIZE = 64 * 1024
-
-        val TRUSTED_HOSTS = listOf(
-            "github.com",
-            "githubusercontent.com",
-            "gitee.com",
-            "gitee.io",
-        )
     }
 }

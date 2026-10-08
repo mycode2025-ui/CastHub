@@ -82,6 +82,7 @@
     <string name="update_apk_from">安装包来自 %1$s</string>
     <string name="update_apk_size">安装包大小：%1$s</string>
     <string name="update_release_notes">更新说明：</string>
+    <string name="update_notes_truncated">（仅显示开头部分，完整说明见发布页）</string>
     <string name="update_no_apk">该版本未附安装包，将打开发布页手动下载。</string>
     <!-- 只要有一个数据源没取到，结论就可能是漏判，必须显式告知 -->
     <string name="update_warnings_title">部分数据源未取到，结论可能不完整</string>
