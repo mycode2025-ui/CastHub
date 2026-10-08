@@ -65,6 +65,12 @@ class SettingsActivity : AppCompatActivity() {
         renderNetwork()
     }
 
+    override fun onResume() {
+        super.onResume()
+        (findViewById<View>(R.id.btn_external_airplay) as? TextView)?.text = ExternalAirPlayBridge.status(this)
+        ExternalAirPlayBridge.onHostResumed(this)
+    }
+
     override fun onDestroy() {
         unregisterLog?.invoke()
         unregisterLog = null
@@ -93,6 +99,12 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         btnToggleLog.setOnClickListener { toggleLog() }
+        findViewById<View>(R.id.btn_diagnostics).setOnClickListener { Diagnostics.show(this) }
+        findViewById<View>(R.id.btn_playback_settings).setOnClickListener { PlaybackSettings.show(this) }
+        findViewById<View>(R.id.btn_sender).setOnClickListener {
+            startActivity(android.content.Intent(this, SenderActivity::class.java))
+        }
+        findViewById<View>(R.id.btn_external_airplay).setOnClickListener { ExternalAirPlayBridge.show(this) }
 
         // ScrollView 在 initScrollView() 里**硬编码 setFocusable(true)**，
         // XML 上写的 android:focusable="false" 会被它覆盖 —— 必须在这里再关一次。
@@ -172,6 +184,8 @@ class SettingsActivity : AppCompatActivity() {
     private fun playbackModeLabel(mode: PlaybackMode): Int = when (mode) {
         PlaybackMode.SINGLE -> R.string.playback_mode_single
         PlaybackMode.REPEAT_ONE -> R.string.playback_mode_repeat_one
+        PlaybackMode.SEQUENTIAL -> R.string.playback_mode_sequential
+        PlaybackMode.REPEAT_ALL -> R.string.playback_mode_repeat_all
     }
 
     private fun showPlaybackModeDialog() {

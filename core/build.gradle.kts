@@ -33,6 +33,8 @@ android {
 }
 
 dependencies {
+    api("androidx.media3:media3-common:1.2.0")
+    api("androidx.media3:media3-exoplayer:1.2.0")
     api("androidx.core:core-ktx:1.12.0")
     api("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")

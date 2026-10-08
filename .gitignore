@@ -41,3 +41,5 @@ Thumbs.db
 # 本地测试用的媒体样本与截图（体积大、可再生成）
 /_testmedia/
 /_shots/
+__pycache__/
+*.pyc

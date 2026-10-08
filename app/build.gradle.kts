@@ -12,8 +12,8 @@ plugins {
 // 若这里与 tag 各写一份，迟早会出现"提示有新版本、装完还是旧版本"。
 //
 // 发布流程：改下面两个值 → 构建 → 打 tag v<versionName> → 传两站 Release。
-val appVersionCode = 19
-val appVersionName = "1.4.2"
+val appVersionCode = 22
+val appVersionName = "1.4.5"
 
 // ───────────────────────── 发布仓库坐标 ─────────────────────────
 //
@@ -117,6 +117,7 @@ android {
 }
 
 dependencies {
+    implementation("androidx.media3:media3-ui:1.2.0")
     implementation(project(":core"))
     implementation(project(":protocol-dlna"))
     implementation(project(":protocol-airplay"))

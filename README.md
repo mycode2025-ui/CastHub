@@ -5,7 +5,29 @@
 
 协议模块相互解耦、可独立启停；任一模块启动失败或被关闭，都不影响另一个模块。
 
-当前版本：**1.4.0**（`versionCode` 17）
+当前版本：**1.4.5**（`versionCode` 22）。签名安装包及验证范围见 [1.4.5 验证记录](docs/VALIDATION-1.4.5.md)。
+
+### 1.4.5 新增入口
+
+- 设置 → 播放与接管设置：持续缓冲 / 进度冻结检测、历史与续播开关、查看 / 清空历史、音轨与字幕偏好。
+- 播放中 → ↑ / 菜单 → 播放质量诊断：真实格式、解码器、缓冲、丢帧和重试次数。
+- 同一菜单 → 外部字幕：加载 SRT / VTT 地址或本地文件、移除字幕，保留播放进度与暂停状态。
+- 同一视频地址再次投送时询问续播；发送端明确指定起播位置时遵从发送端。历史不保存媒体地址或访问凭据。
+- 活跃投屏提供系统媒体会话与播放通知；支持后台媒体键控制。DLNA 控制端可查询可用动作、调整播放模式、切换本地队列上一项 / 下一项。
+- 从独立 AirPlay 接收器返回后提示恢复视频服务；恢复前先在独立接收器中退出接收。
+
+### 1.4.4 使用入口
+
+- 设置 → 播放与接管设置：自动重试开关、直接 / 询问 / 禁止接管，以及画面和字幕偏好。
+- 播放中 → 菜单 / ↑ → 播放队列：手动添加 HTTP / HTTPS 视频地址、上一集 / 下一集、排序和删除；可选择队列顺序 / 循环模式。队列仅包含本机已知地址，不读取手机的完整播放列表；结束投屏会清空。
+- 播放中 → 菜单 / ↑ → 画面 / 字幕设置：适应、填满裁剪、原始大小；字幕字号 50%–200%、离底部位置、时间偏移 ±10 秒（正值延后）。
+- 网络播放错误默认最多自动重试 3 次，间隔 2、4、8 秒；保留进度和暂停意图。404 / 403、格式或解码错误直接报错。手动重试、新媒体、停止或服务释放会重置 / 取消旧重试。
+- 播放中按确定键暂停 / 继续，按 ↑ 或菜单键选择音轨、字幕、重新加载；触摸设备长按画面可打开同一菜单。
+- 设置 → 网络诊断 / 导出日志：查看服务与网络状态、复制或分享脱敏日志、重启接收服务。
+- 设置 → 投到其他设备：搜索 DLNA 接收器，或填写设备描述地址；发送设备可以访问的 HTTP / HTTPS 视频地址。
+- 设置 → AirPlay 镜像 / 音频（独立接收器）：安装 [AirPlay Server](https://f-droid.org/packages/io.github.jqssun.airplay/) 后启动。需要 Android 7.0+。启动会关闭 CastHub 的 AirPlay 视频服务，避免端口及广播冲突；返回后提示先关闭独立接收器再恢复视频服务。
+
+CastHub 内置 AirPlay 提供视频 URL 接收。镜像和音频由独立安装的 [android-airplay-server](https://github.com/jqssun/android-airplay-server) 提供；该 GPL 应用没有被打包或链接进 CastHub，CastHub 的现有许可证保持不变。
 
 ## 下载
 
@@ -83,7 +105,7 @@ CastHub/
 
 | 模块 | 接收端 (RECEIVER) | 发送端 (SENDER) | 依赖 | minSdk |
 |---|---|---|---|---|
-| DLNA / UPnP | ✅ DMR | ✅ DMC（无界面入口） | 自研 UPnP 栈 + Media3，零协议依赖 | 23 |
+| DLNA / UPnP | ✅ DMR | ✅ DMC（设置页入口） | 自研 UPnP 栈 + Media3，零协议依赖 | 23 |
 | AirPlay | ✅ 视频 URL 模式 | — | dd-plist + Media3，**无 native** | 23 |
 
 AirPlay **只实现视频投屏**：AirPlay 视频投屏的协议面很窄 —— 它只把播放地址交给接收端，
@@ -104,7 +126,7 @@ AirPlay **只实现视频投屏**：AirPlay 视频投屏的协议面很窄 —�
 | `device.xml` 的 DLNA 标识 | ✅ | `xmlns:dlna` + `X_DLNADOC=DMR-1.50` + `iconList` |
 | 拉流时的 DLNA 请求头 | ❌ | 未带 `getcontentFeatures.dlna.org` / `transferMode.dlna.org` |
 | 时间 seek（`TimeSeekRange.dlna.org`） | ❌ | 只用字节 Range，故 `OP` 诚实写 `01` 而非 `11` |
-| `GetCurrentTransportActions` / `SetPlayMode` | ❌ | 控制器靠前者决定按钮灰显，暂未实现 |
+| `GetCurrentTransportActions` / `SetPlayMode` | ✅ | 实际可用动作与 NORMAL / REPEAT_ONE / REPEAT_ALL，队列 Next / Previous 和 GENA 模式事件 |
 
 两处刻意的"不写"：
 
@@ -478,7 +500,7 @@ python tools/release.py
 | 无 AirPlay 屏幕镜像 / RAOP 音频 | 视频 URL 模式已实现；镜像与音频是另外两套协议栈，且 mDNS 里不声明 |
 | 无 Miracast | 权限模型所致（`CONFIGURE_WIFI_DISPLAY` 为 signature\|privileged 级），App 无法实现 |
 | 小米系统级「投屏」搜不到本机 | 走 mDNS 私有协议（`_leboremote` / `_mi-connect` 等），不发 SSDP 探测 |
-| DMC（投到其它设备）无界面入口 | 协议链路已通并修好会话映射，UI 未做 |
+| 手机完整播放列表不可获取 | 本地队列仅保存收到或手动添加的地址，无法推断未传来的媒体 |
 | 未做 DRM | AirPlay 侧 DRM 内容（Apple TV+ 等）任何开源接收端都无法解密 |
 | DLNA 协议栈为自研 | 未经 Cling 那样的长期生态验证；协议行为按真实抓包还原，边界场景需实测打磨 |
 
@@ -492,7 +514,7 @@ app/build/outputs/apk/release/app-release.apk  # 给用户装这个（见下方�
 ```
 
 - `applicationId`: `com.casthub.app`
-- `versionName`: `1.4.0`（`versionCode` 17）
+- `versionName`: `1.4.5`（`versionCode` 22）
 - `minSdkVersion`: **23**（Android 6.0）
 - `targetSdkVersion`: 34
 - 签名：**专用发布 keystore**（`keystore/casthub-release.jks`，不入库；缺失时退回 debug 签名，见第五节）

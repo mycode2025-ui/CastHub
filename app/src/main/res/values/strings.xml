@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">CastHub 投屏</string>
+    <string name="playback_mode_sequential">队列顺序播放</string>
+    <string name="playback_mode_repeat_all">队列循环</string>
     <string name="header_subtitle">多协议投屏接收端 · DLNA / AirPlay</string>
 
     <!-- ================= 待机页 ================= -->
@@ -48,7 +50,7 @@
       （手机投一集只发一个 URL，列表在手机 App 里），那两种模式永远不会生效。
       摆一个不生效的选项比没有更糟 —— 用户会当成 bug。
     -->
-    <string name="settings_playback_desc">一条播完后是否自动重播。连播与顺序播放请在手机投屏端选择，那里才有播放列表</string>
+    <string name="settings_playback_desc">选择单曲或队列播放方式。播放中可打开队列，添加视频并调整顺序</string>
     <string name="playback_mode_single">单曲播放</string>
     <string name="playback_mode_repeat_one">单曲循环</string>
     <!-- 投屏进行中不允许改模式：队列指针与新模式不一致，播完那一下的行为会难以预期 -->
@@ -130,7 +132,7 @@
 
     <!-- 平时显示的遥控器操作提示。退出路径必须写出来：
          不写的话用户不知道返回键能结束投屏，只会觉得被困在全屏里 -->
-    <string name="osd_hint_keys">← → 快进 / 快退 10 秒　·　返回键结束投屏</string>
+    <string name="osd_hint_keys">← → 快进 / 快退　·　确定：暂停 / 继续　·　↑：音轨 / 字幕　·　返回：结束</string>
     <string name="osd_seek_forward">⏩ 快进</string>
     <string name="osd_seek_backward">⏪ 快退</string>
     <!-- 例：⏩ 快进 10 秒。具体时间点交给进度条那一行显示，这里不重复 -->

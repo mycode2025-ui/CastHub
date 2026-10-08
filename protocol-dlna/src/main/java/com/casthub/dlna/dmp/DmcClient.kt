@@ -110,6 +110,9 @@ class DmcClient {
     /** 已知设备（不重新搜索）。 */
     fun knownDevices(): List<CastDevice> = endpoints.values.map { it.toCastDevice() }
 
+    fun rendererAt(location: String): CastDevice = loadEndpoint(location)?.toCastDevice()
+        ?: error("无法读取 DLNA 设备描述")
+
     /** 投放媒体：SetAVTransportURI 后自动 Play。 */
     fun play(device: CastDevice, media: MediaInfo): Result<Unit> = runCatching {
         val endpoint = endpoints[device.id] ?: error("设备已离线，请重新搜索")
@@ -179,12 +182,9 @@ class DmcClient {
             ?: return null
 
         val base = URL(location)
-        val absoluteControl = if (controlUrl.startsWith("http", ignoreCase = true)) {
-            controlUrl
-        } else {
-            val normalized = if (controlUrl.startsWith("/")) controlUrl else "/$controlUrl"
-            "${base.protocol}://${base.host}:${base.port}$normalized"
-        }
+        val urlBase = Regex("<URLBase>(.*?)</URLBase>", RegexOption.DOT_MATCHES_ALL)
+            .find(xml)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() }
+        val absoluteControl = URL(urlBase?.let { URL(it) } ?: base, controlUrl).toString()
 
         val endpoint = RendererEndpoint(
             deviceId = udn,
@@ -223,8 +223,8 @@ class DmcClient {
         connection.readTimeout = 8_000
         connection.setRequestProperty("Content-Type", "text/xml; charset=\"utf-8\"")
         connection.setRequestProperty("SOAPACTION", "\"$serviceType#$action\"")
+        try {
         connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-
         val code = connection.responseCode
         if (code !in 200..299) {
             val errorText = connection.errorStream?.bufferedReader()?.use(BufferedReader::readText)
@@ -234,7 +234,10 @@ class DmcClient {
             // 只打日志会让"投屏失败"被报成成功，SetURI 失败后还会继续发 Play
             throw java.io.IOException("对端拒绝 $action：$detail")
         }
-        connection.disconnect()
+        connection.inputStream.close()
+        } finally {
+            connection.disconnect()
+        }
     }
 
     private fun httpGet(url: String): String? = runCatching {
@@ -242,8 +245,12 @@ class DmcClient {
         connection.connectTimeout = 4_000
         connection.readTimeout = 6_000
         connection.setRequestProperty("User-Agent", USER_AGENT)
-        if (connection.responseCode !in 200..299) return null
-        connection.inputStream.bufferedReader().use(BufferedReader::readText)
+        try {
+            if (connection.responseCode !in 200..299) null
+            else connection.inputStream.bufferedReader().use(BufferedReader::readText)
+        } finally {
+            connection.disconnect()
+        }
     }.getOrNull()
 
     private fun buildDidlLite(media: MediaInfo): String {

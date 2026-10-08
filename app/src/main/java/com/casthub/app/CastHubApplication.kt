@@ -2,6 +2,13 @@ package com.casthub.app
 
 import android.app.Application
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
+import android.net.NetworkRequest
+import com.casthub.core.LanAddress
+import com.casthub.core.LocalPlaybackControl
+import com.casthub.core.ModuleState
 import com.casthub.airplay.AirPlayModule
 import com.casthub.app.update.UpdateCoordinator
 import com.casthub.core.CastLogger
@@ -14,6 +21,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * 应用装配点。
@@ -49,6 +60,12 @@ class CastHubApplication : Application() {
         SupervisorJob() + Dispatchers.Main.immediate + CoroutineName("app")
     )
 
+    fun activeControl(): LocalPlaybackControl? {
+        val session = coordinator.sessions.value.firstOrNull { it.media != null && (it.state.isActive || it.state == com.casthub.core.PlaybackState.ERROR) }
+            ?: return null
+        return registry.byId(session.protocolId) as? LocalPlaybackControl
+    }
+
     override fun onCreate() {
         super.onCreate()
 
@@ -60,6 +77,13 @@ class CastHubApplication : Application() {
             com.casthub.dlna.DlnaModule(this),
             AirPlayModule(this),
         )
+        modules.forEach { module ->
+            val claim: (com.casthub.core.PlaybackRequest, () -> Unit) -> Unit = { request, action -> claimPlayback(module.id, request, action) }
+            when (module) {
+                is com.casthub.dlna.DlnaModule -> module.playbackTransaction = claim
+                is AirPlayModule -> module.playbackTransaction = claim
+            }
+        }
 
         // 拉齐设备名。各协议模块自己也能存名字，若不统一，手机上会看到本设备
         // 以不同名字出现多次（例如 "CastHub 投屏接收端" 与 "CastHub AirPlay"），
@@ -84,6 +108,7 @@ class CastHubApplication : Application() {
             runCatching { registry.startEnabled() }
                 .onFailure { CastLogger.e(TAG, "启动已启用模块失败", it) }
         }
+        observeNetwork()
     }
 
     /** 当前设备名。所有协议模块共用这一个名字。 */
@@ -149,6 +174,117 @@ class CastHubApplication : Application() {
     }
 
     private val prefs by lazy { getSharedPreferences(PREFS_NAME, MODE_PRIVATE) }
+
+    private val playbackLock = Any()
+
+    /** The incoming protocol takes over; stop competing audio before queuing its play. */
+    class TakeoverAnswer {
+        private val latch = java.util.concurrent.CountDownLatch(1)
+        private val value = java.util.concurrent.atomic.AtomicReference<Boolean?>(null)
+        fun complete(answer: Boolean) { if (value.compareAndSet(null, answer)) latch.countDown() }
+        fun get(timeout: Long, unit: java.util.concurrent.TimeUnit): Boolean {
+            if (!latch.await(timeout, unit)) throw java.util.concurrent.TimeoutException()
+            return value.get() == true
+        }
+    }
+    data class TakeoverPrompt(val protocolId: String, val peer: String,
+                              val ownerKey: String, val answer: TakeoverAnswer)
+    private val _takeoverPrompt = kotlinx.coroutines.flow.MutableStateFlow<TakeoverPrompt?>(null)
+    val takeoverPrompt = _takeoverPrompt.asStateFlow()
+    fun answerTakeover(prompt: TakeoverPrompt, accept: Boolean) { prompt.answer.complete(accept) }
+
+    private fun owner() = modules.flatMap { it.sessions.value }.firstOrNull {
+        it.media != null && (it.state.isActive || it.state == com.casthub.core.PlaybackState.ERROR)
+    }
+    private fun ownerKey() = owner()?.let { "${it.id}|${it.protocolId}|${it.peerAddress}|${it.media?.uri}" }.orEmpty()
+    private fun <T> onMain(action: () -> T): T {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) return action()
+        val task = java.util.concurrent.FutureTask<T> { action() }
+        android.os.Handler(android.os.Looper.getMainLooper()).post(task)
+        try { return task.get(5, java.util.concurrent.TimeUnit.SECONDS) }
+        catch (e: java.util.concurrent.ExecutionException) { throw (e.cause ?: e) }
+        catch (e: java.util.concurrent.TimeoutException) { task.cancel(false); throw java.io.IOException("播放接管超时", e) }
+    }
+    private fun claimPlayback(protocolId: String, request: com.casthub.core.PlaybackRequest, action: () -> Unit) {
+        val prompt = onMain {
+            val current = owner()
+            val sameSender = current?.protocolId == protocolId && current.peerAddress == request.peerAddress
+            if (current == null || sameSender || store.takeoverPolicy() == com.casthub.core.TakeoverPolicy.ALLOW) {
+                enactPlayback(protocolId, action)
+                null
+            } else when (store.takeoverPolicy()) {
+                com.casthub.core.TakeoverPolicy.BLOCK -> throw com.casthub.core.PlaybackRejectedException("播放期间禁止接管")
+                else -> {
+                    if (_takeoverPrompt.value != null) throw com.casthub.core.PlaybackRejectedException("另一投屏请求正在确认")
+                    TakeoverPrompt(protocolId, request.peerAddress, ownerKey(), TakeoverAnswer())
+                        .also { _takeoverPrompt.value = it; bringMainToFront() }
+                }
+            }
+        } ?: return
+        val accepted = try { prompt.answer.get(20, java.util.concurrent.TimeUnit.SECONDS) }
+            catch (_: java.util.concurrent.TimeoutException) { false }
+        finally { prompt.answer.complete(false) }
+        onMain {
+            if (_takeoverPrompt.value === prompt) _takeoverPrompt.value = null
+            if (!accepted || ownerKey() != prompt.ownerKey)
+                throw com.casthub.core.PlaybackRejectedException("接管请求被拒绝、超时或原会话已变化")
+            if (registry.byId(protocolId)?.state?.value?.isRunning != true)
+                throw com.casthub.core.PlaybackRejectedException("接收服务已停止")
+            enactPlayback(protocolId, action)
+        }
+    }
+    private fun enactPlayback(protocolId: String, action: () -> Unit) {
+        synchronized(playbackLock) {
+            CastLogger.d(TAG, "接管播放：$protocolId")
+            modules.filter { it.id != protocolId }.forEach { (it as? LocalPlaybackControl)?.stopCasting() }
+            action()
+        }
+    }
+
+    private var networkJob: Job? = null
+    private var lanIp: String? = null
+
+    private fun scheduleNetworkRefresh() {
+        appScope.launch {
+            networkJob?.cancel()
+            networkJob = appScope.launch {
+                delay(1200)
+                appScope.launch { refreshNetwork() }
+            }
+        }
+    }
+
+    private val networkMutex = kotlinx.coroutines.sync.Mutex()
+
+    private suspend fun refreshNetwork() = networkMutex.withLock {
+        val ip = LanAddress.ipv4(this)
+        if (ip != lanIp) {
+            CastLogger.i(TAG, "局域网变化：${lanIp ?: "离线"} → ${ip ?: "离线"}")
+            lanIp = ip
+            modules.forEach { registry.restart(it) }
+        } else if (ip != null) {
+            modules.filter { registry.isEnabled(it) && it.state.value is ModuleState.Failed }
+                .forEach { registry.restart(it) }
+        }
+    }
+
+    private fun observeNetwork() {
+        lanIp = LanAddress.ipv4(this)
+        val manager = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = scheduleNetworkRefresh()
+            override fun onLost(network: Network) = scheduleNetworkRefresh()
+            override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) = scheduleNetworkRefresh()
+        }
+        runCatching { manager.registerNetworkCallback(NetworkRequest.Builder().build(), callback) }
+            .onFailure { CastLogger.w(TAG, "注册网络监听失败，使用定时恢复", it) }
+        appScope.launch {
+            while (true) {
+                delay(15_000)
+                refreshNetwork()
+            }
+        }
+    }
 
     companion object {
         private const val TAG = "CastHubApp"

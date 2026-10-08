@@ -35,7 +35,7 @@ class DmrService(
     interface Callbacks {
         fun onMediaChanged(media: MediaInfo?)
         fun onPlaybackStateChanged(state: PlaybackState)
-        fun onPeerActivity(peerName: String)
+        fun onPeerActivity(peerName: String, peerAddress: String = "")
         fun onError(message: String, cause: Throwable? = null)
     }
 
@@ -81,6 +81,7 @@ class DmrService(
 
     /** 播放模式由应用层注入（用户在设置页选，跨协议共用一个设置）。 */
     var modeProvider: () -> PlaybackMode = { PlaybackMode.SINGLE }
+    var playbackTransaction: ((com.casthub.core.PlaybackRequest, () -> Unit) -> Unit)? = null
 
     /**
      * 一条内容播放完毕（ENDED）时调用。
@@ -100,13 +101,39 @@ class DmrService(
             CastLogger.i(TAG, "播放结束（${queue.summary()}），保持当前会话，等发送端指令")
             return false
         }
-        CastLogger.i(TAG, "单曲循环：重播 ${again.media.title ?: again.media.uri.take(60)}")
-        // 回到开头重播。走 seek 而不是重新 open：
-        // 直链常带时效 token，重新 open 可能已经过期；而这一条本来就在播。
-        controller.seekTo(0)
-        controller.play()
+        if (queue.mode == PlaybackMode.REPEAT_ONE) {
+            controller.seekTo(0)
+            controller.play()
+        } else playEntry(again)
         notifyTransportChange()
         return true
+    }
+
+    fun queueEntries() = queue.entries()
+    fun queueCurrentId() = queue.current?.id
+    fun queueAdd(media: MediaInfo): Boolean = runCatching { queue.add(media); true }.getOrDefault(false)
+    fun queuePlay(id: String): Boolean = queue.select(id)?.let { playEntry(it); true } ?: false
+    fun queueStep(delta: Int): Boolean = queue.step(delta)?.let { playEntry(it); true } ?: false
+    fun queueMove(id: String, delta: Int) = queue.move(id, delta)
+    fun queueRemove(id: String): Boolean {
+        if (queue.current?.id == id) {
+            val another = queue.entries().firstOrNull { it.id != id } ?: run {
+                controller.stop(); queue.clear(); currentUri = ""; currentMetaXml = ""
+                callbacks.onMediaChanged(null); notifyTransportChange(); return true
+            }
+            queue.select(another.id)
+            playEntry(another)
+        }
+        return queue.remove(id)
+    }
+    private fun playEntry(entry: PlaybackQueue.Entry) {
+        currentUri = entry.media.uri
+        currentMetaXml = entry.metaXml
+        pendingStartPositionMs = 0
+        callbacks.onMediaChanged(entry.media)
+        controller.open(entry.media.copy(startPositionMs = 0))
+        controller.play()
+        notifyTransportChange()
     }
 
     /** 供日志/测试查看队列状态。 */
@@ -140,6 +167,7 @@ class DmrService(
             val httpServer = UpnpHttpServer(port, events).apply {
                 handler = Handler()
             }
+            http = httpServer
             httpServer.start()
 
             val ssdpServer = SsdpServer(
@@ -149,6 +177,7 @@ class DmrService(
                 deviceName = friendlyName,
                 udn = udn,
             )
+            ssdp = ssdpServer
             ssdpServer.start()
 
             http = httpServer
@@ -158,6 +187,7 @@ class DmrService(
             CastLogger.e(TAG, "DMR 启动失败", t)
             stop()
             callbacks.onError("DLNA 接收端启动失败：${t.message}", t)
+            throw t
         }
     }
 
@@ -196,8 +226,9 @@ class DmrService(
             service: String,
             action: String,
             args: Map<String, String>,
+            peerAddress: String,
         ): Map<String, String>? = when (service) {
-            DeviceDescription.SERVICE_AV_TRANSPORT -> avTransport(action, args)
+            DeviceDescription.SERVICE_AV_TRANSPORT -> avTransport(action, args, peerAddress)
             DeviceDescription.SERVICE_RENDERING_CONTROL -> renderingControl(action, args)
             DeviceDescription.SERVICE_CONNECTION_MANAGER -> connectionManager(action, args)
             else -> null
@@ -205,10 +236,10 @@ class DmrService(
 
         // ── AVTransport ──
 
-        private fun avTransport(action: String, args: Map<String, String>): Map<String, String>? =
+        private fun avTransport(action: String, args: Map<String, String>, peerAddress: String): Map<String, String>? =
             when (action) {
                 "SetAVTransportURI" -> {
-                    handleSetUri(args)
+                    handleSetUri(args, peerAddress)
                     notifyTransportChange()
                     emptyMap()
                 }
@@ -280,7 +311,7 @@ class DmrService(
 
                 "GetTransportInfo" -> mapOf(
                     "CurrentTransportState" to controller.state.toUpnpName(),
-                    "CurrentTransportStatus" to "OK",
+                    "CurrentTransportStatus" to if (controller.state == PlaybackState.ERROR) "ERROR_OCCURRED" else "OK",
                     "CurrentSpeed" to "1",
                 )
 
@@ -318,11 +349,24 @@ class DmrService(
                 )
 
                 "GetTransportSettings" -> mapOf(
-                    "PlayMode" to "NORMAL",
+                    "PlayMode" to com.casthub.core.TransportActions.modeName(modeProvider()),
                     "RecQualityMode" to "NOT_IMPLEMENTED",
                 )
 
-                "Next", "Previous" -> emptyMap()
+                "GetCurrentTransportActions" -> mapOf("Actions" to availableActions())
+                "SetPlayMode" -> {
+                    val mode = com.casthub.core.TransportActions.parseMode(args["NewPlayMode"].orEmpty())
+                        ?: throw com.casthub.dlna.upnp.UpnpActionException(712, "Play mode not supported")
+                    com.casthub.core.ModuleEnabledStore(context).setPlaybackMode(mode)
+                    queue.mode = mode
+                    notifyTransportChange()
+                    emptyMap()
+                }
+                "Next", "Previous" -> {
+                    if (!queueStep(if (action == "Next") 1 else -1))
+                        throw com.casthub.dlna.upnp.UpnpActionException(711, "Illegal seek target")
+                    emptyMap()
+                }
 
                 else -> {
                     CastLogger.w(TAG, "不支持的 AVTransport 动作：$action")
@@ -330,7 +374,12 @@ class DmrService(
                 }
             }
 
-        private fun handleSetUri(args: Map<String, String>) {
+        private fun handleSetUri(args: Map<String, String>, peerAddress: String) {
+            val action = { handleSetUriLocked(args); callbacks.onPeerActivity("", peerAddress) }
+            playbackTransaction?.invoke(com.casthub.core.PlaybackRequest(peerAddress, args["CurrentURI"].orEmpty()), action) ?: action()
+        }
+
+        private fun handleSetUriLocked(args: Map<String, String>) {
             val uri = args["CurrentURI"].orEmpty()
             val meta = args["CurrentURIMetaData"].orEmpty()
 
@@ -453,6 +502,13 @@ class DmrService(
         events.notifyLastChange("RenderingControl", buildRenderingEvent())
     }
 
+    private fun availableActions(): String {
+        val entries = queue.entries()
+        val index = entries.indexOfFirst { it.id == queue.current?.id }
+        return com.casthub.core.TransportActions.available(controller.state, controller.currentUri != null,
+            controller.canSeekNow(), index > 0, index >= 0 && index < entries.lastIndex)
+    }
+
     private fun buildTransportEvent(): String {
         val position = runCatching { controller.currentPosition() }.getOrNull()
         return buildString {
@@ -460,6 +516,8 @@ class DmrService(
             append("<InstanceID val=\"0\">")
             append("<TransportState val=\"${position?.state?.toUpnpName() ?: "STOPPED"}\"/>")
             append("<TransportStatus val=\"OK\"/>")
+            append("<CurrentPlayMode val=\"${com.casthub.core.TransportActions.modeName(modeProvider())}\"/>")
+            append("<CurrentTransportActions val=\"${availableActions()}\"/>")
             append("<NumberOfTracks val=\"1\"/>")
             append("<CurrentTrack val=\"1\"/>")
             if (currentUri.isNotEmpty()) {

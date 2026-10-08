@@ -72,6 +72,8 @@ class DlnaModule(private val appContext: Context) : ProtocolModule, VideoOutput,
 
     private val _sessions = MutableStateFlow<List<CastSession>>(emptyList())
     override val sessions: StateFlow<List<CastSession>> = _sessions.asStateFlow()
+    private val _subtitleCues = MutableStateFlow<List<androidx.media3.common.text.Cue>>(emptyList())
+    override val subtitleCues = _subtitleCues.asStateFlow()
 
     private val _events = MutableSharedFlow<CastEvent>(extraBufferCapacity = 64)
     override val events: SharedFlow<CastEvent> = _events.asSharedFlow()
@@ -87,6 +89,11 @@ class DlnaModule(private val appContext: Context) : ProtocolModule, VideoOutput,
     private var controller: MediaRendererController? = null
     private var dmr: DmrService? = null
     private var dmc: DmcClient? = null
+
+    @Volatile
+    private var currentSurface: Surface? = null
+
+    var playbackTransaction: ((com.casthub.core.PlaybackRequest, () -> Unit) -> Unit)? = null
 
     /**
      * 当前接收端会话。
@@ -126,7 +133,7 @@ class DlnaModule(private val appContext: Context) : ProtocolModule, VideoOutput,
         _state.value = ModuleState.Starting
 
         try {
-            val ip = NetworkUtils.localIpv4()
+            val ip = com.casthub.core.LanAddress.ipv4(appContext)
                 ?: error("未找到局域网 IPv4 地址，请确认已连接 Wi-Fi")
 
             currentIp = ip
@@ -141,6 +148,7 @@ class DlnaModule(private val appContext: Context) : ProtocolModule, VideoOutput,
                     tryEmit(CastEvent.PositionChanged(session.id, id, position))
                 },
                 onError = { message, cause -> handleError(message, cause) },
+                onCues = { _subtitleCues.value = it },
                 // 播完：由电视端按用户在设置页选的模式决定要不要接下一条。
                 // ENEDED 在控制器里被映射成 PAUSED（播完 ≠ 投屏结束），
                 // 所以这里用独立回调拿这个信号，避免把"用户暂停"误当成"放完了"。
@@ -175,10 +183,10 @@ class DlnaModule(private val appContext: Context) : ProtocolModule, VideoOutput,
                     override fun onPlaybackStateChanged(state: PlaybackState) =
                         handlePlaybackState(state)
 
-                    override fun onPeerActivity(peerName: String) {
-                        if (peerName.isBlank()) return
+                    override fun onPeerActivity(peerName: String, peerAddress: String) {
+                        if (peerName.isBlank() && peerAddress.isBlank()) return
                         val session = activeSession ?: createSession()
-                        activeSession = session.copy(peerName = peerName)
+                        activeSession = session.copy(peerName = peerName.ifBlank { session.peerName }, peerAddress = peerAddress.ifBlank { session.peerAddress })
                         publishSessions()
                     }
 
@@ -188,6 +196,7 @@ class DlnaModule(private val appContext: Context) : ProtocolModule, VideoOutput,
             )
 
             // 音量控制桥接到系统媒体音量。
+            rendererService.playbackTransaction = { request, action -> playbackTransaction?.invoke(request, action) ?: action() }
             // 不直接用 renderer.setSystemVolume：手机端 SetVolume 普遍给 100，
             // 照字面执行会把电视顶到最大声。改走闸门，按投屏开始时的音量做上限。
             rendererService.volumeReader = { renderer.systemVolume() }
@@ -203,10 +212,10 @@ class DlnaModule(private val appContext: Context) : ProtocolModule, VideoOutput,
             // 播放模式来自用户在设置页的选择，跨协议共用
             rendererService.modeProvider = { store.playbackMode() }
 
-            rendererService.start(deviceName, currentPort)
-
             controller = renderer
             dmr = rendererService
+            renderer.attachSurface(currentSurface)
+            rendererService.start(deviceName, currentPort)
             dmc = DmcClient()
 
             _state.value = ModuleState.Running
@@ -240,9 +249,13 @@ class DlnaModule(private val appContext: Context) : ProtocolModule, VideoOutput,
 
         activeSession = null
         _sessions.value = emptyList()
+        currentIp = ""
+        currentPort = 0
+        _subtitleCues.value = emptyList()
     }
 
     override fun attachSurface(surface: Surface?) {
+        currentSurface = surface
         controller?.attachSurface(surface)
     }
 
@@ -266,6 +279,10 @@ class DlnaModule(private val appContext: Context) : ProtocolModule, VideoOutput,
     override suspend fun discoverRenderers(timeoutMs: Long): List<CastDevice> {
         val client = dmc ?: return emptyList()
         return client.discover(timeoutMs)
+    }
+
+    suspend fun rendererAt(location: String): Result<CastDevice> = kotlinx.coroutines.withContext(Dispatchers.IO) {
+        runCatching { (dmc ?: error("DLNA 模块未启动")).rendererAt(location) }
     }
 
     override suspend fun play(device: CastDevice, media: MediaInfo): Result<CastSession> =
@@ -355,7 +372,7 @@ class DlnaModule(private val appContext: Context) : ProtocolModule, VideoOutput,
      * 而不是按了没反应让用户以为遥控器坏了。
      */
     override val canSeek: Boolean
-        get() = controller?.let { runCatching { it.duration() > 0 }.getOrDefault(false) } ?: false
+        get() = controller?.canSeekNow() == true
 
     override fun seekBy(deltaMs: Long): Boolean {
         val renderer = controller ?: return false
@@ -391,6 +408,48 @@ class DlnaModule(private val appContext: Context) : ProtocolModule, VideoOutput,
         volumeGovernor.reset()
         return true
     }
+
+    override fun setPlaying(play: Boolean): Boolean {
+        val p = controller ?: return false
+        if (activeSession == null) return false
+        if (play) p.play() else p.pause()
+        return true
+    }
+    override fun togglePause(): Boolean {
+        val renderer = controller ?: return false
+        if (activeSession == null) return false
+        if (renderer.wantsToPlay()) renderer.pause() else renderer.play()
+        return true
+    }
+
+    override fun retryPlayback(): Boolean {
+        if (activeSession?.media == null) return false
+        controller?.retry() ?: return false
+        return true
+    }
+
+    override fun tracks() = controller?.tracks().orEmpty()
+    override fun selectTrack(choice: com.casthub.core.MediaTrackChoice) = controller?.selectTrack(choice) ?: false
+
+    override fun queueEntries() = dmr?.queueEntries().orEmpty()
+    override fun videoDimensions() = controller?.videoDimensions() ?: (0 to 0)
+    override fun queueCurrentId() = dmr?.queueCurrentId()
+    override fun queueAdd(media: MediaInfo) = dmr?.queueAdd(media) ?: false
+    override fun queuePlay(id: String) = dmr?.queuePlay(id) ?: false
+    override fun queueStep(delta: Int) = dmr?.queueStep(delta) ?: false
+    override fun queueMove(id: String, delta: Int) = dmr?.queueMove(id, delta) ?: false
+    override fun queueRemove(id: String) = dmr?.queueRemove(id) ?: false
+    override fun playbackDiagnostics() = controller?.playbackDiagnostics() ?: "播放器未启动"
+    override fun resumeCandidate() = controller?.resumeCandidate()
+    override fun applyTrackPreferences() { controller?.applyTrackPreferences() }
+    override fun externalSubtitle(address: String?, mimeType: String) = controller?.externalSubtitle(address, mimeType) ?: false
+    override fun seekAbsolute(positionMs: Long): Boolean {
+        if (!canSeek) return false
+        controller?.seekTo(positionMs)
+        return true
+    }
+    override fun refreshTransportSettings() { dmr?.notifyTransportChange() }
+    override fun refreshSubtitleTiming() { controller?.refreshSubtitleTiming() }
 
     fun shutdown() {
         moduleScope.cancel()

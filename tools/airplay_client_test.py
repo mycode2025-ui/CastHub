@@ -249,9 +249,12 @@ def main():
     ap.add_argument("--media", default="", help="一个可播放的 http:// 地址（mp4/m3u8）")
     ap.add_argument("--instance", default="CastHub",
                     help="被测实例名关键字。电视自带的投屏服务也会应答，默认只认 CastHub")
+    ap.add_argument("--skip-discovery", action="store_true", help="ADB 转发 / NAT 虚拟机仅测试 TCP；mDNS 未验证")
     args = ap.parse_args()
 
-    mdns_port = test_discovery(args.instance)
+    mdns_port = None if args.skip_discovery else test_discovery(args.instance)
+    if args.skip_discovery:
+        print("SKIP: mDNS discovery (NAT/ADB forwarding); not counted as PASS")
     port = args.port or mdns_port or 7000
 
     print(f"\n=== 二、控制层（TCP :{port}） ===")
@@ -275,8 +278,9 @@ def main():
           "101" in head and "PTTH/1.0" in head, head.split("\r\n")[0] or "—")
 
     head, body = http("GET", "/playback-info", args.ip, port)
-    idle = plist_of(body) or {}
-    check(11, "/playback-info 是 XML plist", idle is not None,
+    parsed_idle = plist_of(body)
+    idle = parsed_idle or {}
+    check(11, "/playback-info 是 XML plist", parsed_idle is not None,
           f"rate={idle.get('rate')} readyToPlay={idle.get('readyToPlay')}")
 
     if not args.media:
@@ -336,8 +340,8 @@ def main():
     check(18, "/scrub 定位生效", duration <= 0 or abs(pos_d - target) < 5.0,
           f"目标 {target:.1f}s，实际 {pos_d:.1f}s")
 
-    http("POST", "/volume?volume=0.5", args.ip, port, headers={"Content-Length": "0"})
-    check(19, "/volume 不报错", True, "已发送")
+    head, _ = http("POST", "/volume?volume=0.5", args.ip, port, headers={"Content-Length": "0"})
+    check(19, "/volume 返回成功", " 200 " in head, head.split("\r\n")[0])
 
     head, _ = http("POST", "/stop", args.ip, port, headers={"Content-Length": "0"})
     time.sleep(1.0)

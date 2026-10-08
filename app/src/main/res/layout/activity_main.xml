@@ -31,6 +31,11 @@
             android:id="@+id/surface_view"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
+        <androidx.media3.ui.SubtitleView
+            android:id="@+id/subtitle_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_gravity="center" />
 
         <!--
           投屏信息浮层（OSD）。投屏开始时短暂出现后自动淡出；

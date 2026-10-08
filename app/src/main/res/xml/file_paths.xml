@@ -7,6 +7,7 @@
   **绝不能**放开整个 cacheDir 或 filesDir：那等于把应用的私有目录对外敞开。
 -->
 <paths>
+    <cache-path name="diagnostics" path="diagnostics/" />
     <cache-path
         name="updates"
         path="updates/" />

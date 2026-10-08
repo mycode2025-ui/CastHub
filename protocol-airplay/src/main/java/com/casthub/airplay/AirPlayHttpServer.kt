@@ -135,9 +135,9 @@ internal class AirPlayHttpServer(
         val peer = client.inetAddress?.hostAddress ?: ""
         clients.add(client)
         try {
-            client.soTimeout = 0 // /reverse 是长连接，不能设超时
+            client.soTimeout = 30_000
             val input = client.getInputStream()
-            val output = client.getOutputStream()
+            val output = java.io.BufferedOutputStream(client.getOutputStream())
 
             while (running && !client.isClosed) {
                 val head = readUntilBlankLine(input) ?: return
@@ -178,12 +178,14 @@ internal class AirPlayHttpServer(
 
                 // /reverse 会把这条连接"升级"成事件通道，之后不再解析请求，直接持有
                 if (path == "/reverse") {
+                    client.soTimeout = 0
                     writeRaw(
                         output,
                         "HTTP/1.1 101 Switching Protocols\r\n" +
                             "Upgrade: PTTH/1.0\r\n" +
                             "Connection: Upgrade\r\n\r\n",
                     )
+                    output.flush()
                     CastLogger.d(TAG, "已建立反向连接（/reverse）")
                     // 保持连接：靠读取阻塞，对端断开时 read 返回 -1
                     val buf = ByteArray(1024)
@@ -247,7 +249,11 @@ internal class AirPlayHttpServer(
                     return
                 }
                 CastLogger.i(TAG, "▶ /play ${url.take(120)}（起始 ${info.second}s）")
-                sink?.onPlay(url, info.second, peer)
+                try { sink?.onPlay(url, info.second, peer) }
+                catch (_: com.casthub.core.PlaybackRejectedException) {
+                    writeText(output, 409, "Conflict")
+                    return
+                }
                 writeText(output, 200, "OK")
             }
 
@@ -344,37 +350,7 @@ internal class AirPlayHttpServer(
         body: ByteArray,
         headers: Map<String, String> = emptyMap(),
     ): Pair<String, Double>? {
-        // ① 请求头（iOS / bilibili 走这条）
-        val headerUrl = headers["content-location"]?.takeIf { it.isNotBlank() }
-        if (headerUrl != null) {
-            val start = headers["start-position"]?.toDoubleOrNull() ?: 0.0
-            return headerUrl to start
-        }
-
-        if (body.isEmpty()) return null
-
-        // ② 二进制 / XML plist（dd-plist 自动识别格式，不要再手写 "bplist00" 前缀判断）
-        val map = Plist.parse(body) as? Map<*, *>
-        if (map != null) {
-            val url = map["Content-Location"]?.toString()
-                ?: map["content-location"]?.toString()
-            if (!url.isNullOrBlank()) {
-                val start = map["Start-Position"]?.toString()?.toDoubleOrNull() ?: 0.0
-                return url to start
-            }
-        }
-
-        // ③ JSON（极少数客户端）
-        val text = String(body, Charsets.UTF_8)
-        if (text.trimStart().startsWith("{")) {
-            val url = Regex("\"Content-Location\"\\s*:\\s*\"([^\"]+)\"").find(text)
-                ?.groupValues?.get(1)
-            val start = Regex("\"Start-Position\"\\s*:\\s*([0-9.]+)").find(text)
-                ?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0
-            return url?.let { it to start }
-        }
-
-        return null
+        return PlayRequestParser.parse(body, headers)
     }
 
     // ───────────────────────── 响应构造 ─────────────────────────
@@ -497,6 +473,7 @@ internal class AirPlayHttpServer(
             if (n < 0) return if (sb.isEmpty()) null else sb.toString()
             val c = buf[0].toInt().toChar()
             sb.append(c)
+            if (sb.length > 65_536) return null
             if (c == '\r') {
                 sawCr = true
                 continue

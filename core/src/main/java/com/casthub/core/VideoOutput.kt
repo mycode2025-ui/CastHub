@@ -10,6 +10,7 @@ import android.view.Surface
  * 底层用的是 ExoPlayer 还是 MediaCodec。
  */
 interface VideoOutput {
+    val subtitleCues: kotlinx.coroutines.flow.StateFlow<List<androidx.media3.common.text.Cue>>? get() = null
     /** 传入/解除 Surface。传 null 表示界面销毁，模块应停止渲染但不必停止接收。 */
     fun attachSurface(surface: Surface?)
 
@@ -26,4 +27,5 @@ interface VideoOutput {
      * 尺寸对了，无论解码器怎么缩放，结果都是正确的。
      */
     fun videoAspectRatio(): Float = 0f
+    fun videoDimensions(): Pair<Int, Int> = 0 to 0
 }

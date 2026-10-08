@@ -38,7 +38,15 @@ import com.casthub.core.VideoAspect
 internal class AirPlayPlayer(private val context: Context) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private fun onMain(action: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) action() else mainHandler.post(action)
+    }
     private var player: ExoPlayer? = null
+    private val support = com.casthub.core.PlaybackSupport(context)
+    private var pendingStartFraction = 0.0
+    private var pendingResumeMs = 0L
+    private val recovery = com.casthub.core.PlaybackRecovery { com.casthub.core.ModuleEnabledStore(context).autoRetry() }
+    private var recovering = false
 
     @Volatile
     private var surface: Surface? = null
@@ -58,9 +66,13 @@ internal class AirPlayPlayer(private val context: Context) {
     @Volatile
     private var lastEnded = false
 
+    @Volatile
+    private var lastFailed = false
+
     /** 画面应有宽高比（宽 ÷ 高），未知为 0。界面拿它给 Surface 定尺寸。 */
     @Volatile
     private var lastAspectRatio: Float = 0f
+    private var dimensions = 0 to 0
 
     /** 状态变化回调（在主线程触发）。 */
     var onStateChanged: (() -> Unit)? = null
@@ -78,19 +90,22 @@ internal class AirPlayPlayer(private val context: Context) {
 
     /** 出错回调（在主线程触发）。 */
     var onError: ((String) -> Unit)? = null
+    var onCues: ((List<androidx.media3.common.text.Cue>) -> Unit)? = null
 
     /** 起播后的取样循环，保证 /playback-info 能读到递进的进度。 */
+    private var sampling = false
     private val sampler = object : Runnable {
         override fun run() {
+            player?.let { sampleSupport(it) }
             cache()
             onStateChanged?.invoke()
-            mainHandler.postDelayed(this, SAMPLE_INTERVAL_MS)
+            if (sampling) mainHandler.postDelayed(this, SAMPLE_INTERVAL_MS)
         }
     }
 
     fun setSurface(s: Surface?) {
         surface = s
-        mainHandler.post { player?.setVideoSurface(s) }
+        onMain { player?.setVideoSurface(s) }
     }
 
     /**
@@ -108,20 +123,36 @@ internal class AirPlayPlayer(private val context: Context) {
     /** 只在主线程调用。 */
     private fun ensurePlayer(): ExoPlayer {
         player?.let { return it }
-        val p = ExoPlayer.Builder(context)
+        val p = ExoPlayer.Builder(context, com.casthub.core.SubtitleRenderers(context))
             .setMediaSourceFactory(
                 DefaultMediaSourceFactory(DefaultDataSource.Factory(context, httpFactory)),
             )
             .build()
             .apply {
                 addListener(object : Player.Listener {
+                    override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) {
+                        CastLogger.d(TAG, "字幕更新：${cueGroup.cues.size}")
+                        onCues?.invoke(cueGroup.cues)
+                    }
                     override fun onPlaybackStateChanged(state: Int) {
+                        if (state == Player.STATE_READY) {
+                            recovering = false
+                            val p = player
+                            val target = if (pendingResumeMs > 0) pendingResumeMs
+                                else if (p != null && p.duration > 0) (p.duration * pendingStartFraction).toLong() else 0
+                            if (target > 0) {
+                                pendingStartFraction = 0.0
+                                pendingResumeMs = 0L
+                                p?.seekTo(target)
+                            }
+                        }
+                        val wasEnded = lastEnded
                         cache()
                         if (state == Player.STATE_ENDED) {
                             CastLogger.i(TAG, "播放结束（会话保留，等 iPhone 下一步指令）")
                             stopSampling()
                             // 只在进入 ENDED 的这一次通知，避免重复回调把队列推着走
-                            if (!lastEnded) {
+                            if (!wasEnded) {
                                 lastEnded = true
                                 runCatching { onEnded?.invoke() }
                                     .onFailure { CastLogger.w(TAG, "播完回调失败", it) }
@@ -140,11 +171,7 @@ internal class AirPlayPlayer(private val context: Context) {
                         onStateChanged?.invoke()
                     }
 
-                    override fun onPlayerError(error: PlaybackException) {
-                        CastLogger.e(TAG, "播放失败：${error.message}")
-                        stopSampling()
-                        onError?.invoke(error.message ?: "播放失败")
-                    }
+                    override fun onPlayerError(error: PlaybackException) { handleFailure(player ?: return, error) }
 
                     /**
                      * 记下画面宽高比交给界面。裸 Surface 上画面会被非等比拉伸填满
@@ -152,6 +179,7 @@ internal class AirPlayPlayer(private val context: Context) {
                      * 把 Surface 调成视频的形状。
                      */
                     override fun onVideoSizeChanged(videoSize: VideoSize) {
+                        dimensions = videoSize.width to videoSize.height
                         lastAspectRatio = VideoAspect.of(
                             width = videoSize.width,
                             height = videoSize.height,
@@ -170,12 +198,27 @@ internal class AirPlayPlayer(private val context: Context) {
                 playWhenReady = true
             }
         player = p
+        p.addAnalyticsListener(support)
         return p
     }
 
-    fun play(url: String, startPositionSec: Double, title: String? = null) {
-        mainHandler.post {
+    fun play(url: String, startPositionFraction: Double, title: String? = null, resumePositionMs: Long = 0) {
+        onMain {
+            support.save(player)
+            support.open(url, title, startPositionFraction > 0 || resumePositionMs > 0)
+            recovery.reset()
+            recovering = false
+            pendingStartFraction = startPositionFraction.coerceIn(0.0, 1.0)
+            onCues?.invoke(emptyList())
+            pendingResumeMs = resumePositionMs.coerceAtLeast(0)
+            lastFailed = false
+            lastEnded = false
+            lastPositionMs = 0
+            lastDurationMs = 0
+            lastAspectRatio = 0f
+            dimensions = 0 to 0
             val p = ensurePlayer()
+            support.applyPreferences(p)
             val item = MediaItem.Builder()
                 .setUri(url)
                 .setMediaId(url)
@@ -186,19 +229,8 @@ internal class AirPlayPlayer(private val context: Context) {
                 }
                 .build()
 
-            // HLS 走 HlsMediaSource，其余交给通用的渐进式/自适应源
-            val source = if (isHls(url)) {
-                HlsMediaSource.Factory(
-                    DefaultDataSource.Factory(context, httpFactory),
-                ).createMediaSource(item)
-            } else {
-                null
-            }
-
-            if (source != null) p.setMediaSource(source) else p.setMediaItem(item)
+            p.setMediaItem(item)
             p.prepare()
-            val startMs = (startPositionSec * 1000).toLong()
-            if (startMs > 0) p.seekTo(startMs)
             p.play()
 
             lastEnded = false
@@ -208,15 +240,21 @@ internal class AirPlayPlayer(private val context: Context) {
         }
     }
 
-    fun pause() = mainHandler.post { player?.pause(); cache() }
-    fun resume() = mainHandler.post { player?.play(); cache() }
+    fun pause() = onMain { player?.pause(); cache() }
+    fun resume() = onMain { player?.play(); cache() }
 
-    fun seek(positionSec: Double) = mainHandler.post {
+    fun seek(positionSec: Double) = onMain {
+        support.resetWatchdog()
         player?.seekTo((positionSec * 1000).toLong())
         cache()
     }
 
-    fun stop() = mainHandler.post {
+    fun stop() = onMain {
+        support.save(player)
+        support.resetWatchdog()
+        recovery.reset()
+        recovering = false
+        onCues?.invoke(emptyList())
         stopSampling()
         player?.stop()
         player?.clearMediaItems()
@@ -225,12 +263,15 @@ internal class AirPlayPlayer(private val context: Context) {
         lastPlaying = false
         lastReady = false
         lastEnded = false
+        lastFailed = false
         // 清掉宽高比，否则下一段内容的画面会先按上一段的形状显示
         lastAspectRatio = 0f
         onStateChanged?.invoke()
     }
 
-    fun release() = mainHandler.post {
+    fun release() = onMain {
+        support.save(player)
+        recovery.cancel()
         stopSampling()
         player?.release()
         player = null
@@ -245,6 +286,8 @@ internal class AirPlayPlayer(private val context: Context) {
 
     /** 映射成 core 的统一状态。播完按 PAUSED 处理，见类注释第 3 点。 */
     fun playbackState(): PlaybackState = when {
+        recovering -> PlaybackState.BUFFERING
+        lastFailed -> PlaybackState.ERROR
         lastEnded -> PlaybackState.PAUSED
         lastPlaying -> PlaybackState.PLAYING
         lastReady -> PlaybackState.PAUSED
@@ -257,13 +300,20 @@ internal class AirPlayPlayer(private val context: Context) {
 
     /** 画面应有宽高比（宽 ÷ 高）；未知返回 0，由界面按铺满处理。 */
     fun videoAspectRatio(): Float = lastAspectRatio
+    fun videoDimensions() = dimensions
+
+    fun tracks() = com.casthub.core.PlaybackTracks.choices(player)
+    fun selectTrack(choice: com.casthub.core.MediaTrackChoice) = support.select(player, choice)
+    fun refreshSubtitleTiming() = onMain { player?.let { it.seekTo(it.currentPosition) } }
 
     private fun startSampling() {
+        sampling = true
         mainHandler.removeCallbacks(sampler)
         mainHandler.postDelayed(sampler, SAMPLE_INTERVAL_MS)
     }
 
     private fun stopSampling() {
+        sampling = false
         mainHandler.removeCallbacks(sampler)
     }
 
@@ -283,6 +333,47 @@ internal class AirPlayPlayer(private val context: Context) {
         return lower.endsWith(".m3u8") || lower.contains(".m3u8?") || lower.contains("/m3u8")
     }
 
+
+    private fun handleFailure(p: ExoPlayer, error: PlaybackException) {
+        CastLogger.e(TAG, "播放失败：${error.message}")
+        stopSampling()
+        cache()
+        val position = p.currentPosition
+        if (recovery.schedule(error) {
+            val current = player ?: return@schedule
+            val shouldPlay = current.playWhenReady
+            current.seekTo(position)
+            support.resetWatchdog()
+            current.prepare()
+            current.playWhenReady = shouldPlay
+            startSampling()
+        }) {
+            recovering = true
+            lastFailed = false
+            onStateChanged?.invoke()
+            return
+        }
+        recovering = false
+        lastFailed = true
+        onStateChanged?.invoke()
+        onError?.invoke(com.casthub.core.PlaybackErrors.message(error))
+    }
+
+    private fun sampleSupport(p: ExoPlayer) {
+        if (support.sample(p, recovery.isPending)) {
+            com.casthub.core.CastLogger.w("PlaybackWatchdog", "检测到持续缓冲或进度冻结，进入有限重试")
+            val position = p.currentPosition
+            p.stop()
+            p.seekTo(position)
+            handleFailure(p, PlaybackException("播放长时间没有进展", null, PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT))
+        }
+    }
+    fun canSeekNow() = player?.isCurrentMediaItemSeekable == true
+    fun wantsToPlay() = player?.playWhenReady == true
+    fun playbackDiagnostics() = support.summary(player, recovery.attempts)
+    fun resumeCandidate() = support.resumeCandidate
+    fun applyTrackPreferences() { player?.let(support::applyPreferences) }
+    fun externalSubtitle(address: String?, mimeType: String) = support.externalSubtitle(player, address, mimeType)
     companion object {
         private const val TAG = "AirPlayPlayer"
         private const val USER_AGENT = "CastHub/1.0 (AirPlay Receiver)"

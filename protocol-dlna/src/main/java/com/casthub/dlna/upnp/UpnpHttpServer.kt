@@ -33,7 +33,7 @@ class UpnpHttpServer internal constructor(
          * 处理 SOAP 动作。
          * @return 出参映射；返回 null 表示动作不支持，将回 SOAP Fault。
          */
-        fun onControl(service: String, action: String, args: Map<String, String>): Map<String, String>?
+        fun onControl(service: String, action: String, args: Map<String, String>, peerAddress: String): Map<String, String>?
     }
 
     @Volatile
@@ -57,6 +57,7 @@ class UpnpHttpServer internal constructor(
     fun start() {
         if (running) return
         val server = ServerSocket()
+        serverSocket = server
         server.reuseAddress = true
         server.bind(InetSocketAddress(port))
         serverSocket = server
@@ -134,7 +135,7 @@ class UpnpHttpServer internal constructor(
                     ""
                 }
 
-                val keepAlive = dispatch(method, path, headers, body, output)
+                val keepAlive = dispatch(method, path, headers, body, output, client.inetAddress.hostAddress.orEmpty())
                 if (!keepAlive) break
             }
         } catch (_: java.net.SocketTimeoutException) {
@@ -154,6 +155,7 @@ class UpnpHttpServer internal constructor(
         headers: Map<String, String>,
         body: String,
         output: OutputStream,
+        peerAddress: String,
     ): Boolean {
         val h = handler
         if (h == null) {
@@ -208,7 +210,15 @@ class UpnpHttpServer internal constructor(
                     CastLogger.i(TAG, "  当前 URI = ${args["CurrentURI"]?.take(120)}")
                 }
 
-                val outputs = h.onControl(serviceType, action, args)
+                val outputs = try { h.onControl(serviceType, action, args, peerAddress) }
+                catch (e: UpnpActionException) {
+                    writeText(output, 500, "Internal Server Error", XML_CONTENT_TYPE, Soap.fault(e.code, e.description))
+                    return true
+                }
+                catch (e: com.casthub.core.PlaybackRejectedException) {
+                    writeText(output, 500, "Internal Server Error", XML_CONTENT_TYPE, Soap.fault(701, "Transition not available"))
+                    return true
+                }
                 if (outputs == null) {
                     writeText(output, 500, "Internal Server Error", XML_CONTENT_TYPE,
                         Soap.fault(401, "Invalid Action"))

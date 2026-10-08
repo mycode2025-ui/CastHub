@@ -20,15 +20,18 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AlertDialog
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.casthub.app.update.UpdateFlow
 import com.casthub.core.Availability
 import com.casthub.core.CastLogger
 import com.casthub.core.CastSession
+import com.casthub.core.CastEvent
 import com.casthub.core.LocalPlaybackControl
 import com.casthub.core.ProtocolModule
 import com.casthub.core.VideoOutput
+import com.casthub.core.PlaybackState
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
@@ -45,6 +48,7 @@ import kotlinx.coroutines.launch
  * - 投屏态下方向键被接管为快进 / 快退 —— 用户手里是遥控器，
  *   想看下一段却要专门去掏手机并不合理。
  */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class MainActivity : AppCompatActivity() {
 
     private lateinit var app: CastHubApplication
@@ -65,6 +69,7 @@ class MainActivity : AppCompatActivity() {
 
     // 视频层
     private lateinit var videoLayer: View
+    private lateinit var subtitleView: androidx.media3.ui.SubtitleView
     private lateinit var osdPanel: View
     private lateinit var tvOsdTitle: TextView
     private lateinit var tvOsdSource: TextView
@@ -159,9 +164,12 @@ class MainActivity : AppCompatActivity() {
         renderHome()
         // 用户去系统设置里开了「安装未知应用」后返回，接着把升级走完
         updateFlow.onHostResumed()
+        ExternalAirPlayBridge.onHostResumed(this)
+        renderSessions(app.coordinator.sessions.value)
     }
 
     override fun onDestroy() {
+        resumeDialog?.dismiss()
         osdHandler.removeCallbacksAndMessages(null)
         super.onDestroy()
     }
@@ -188,6 +196,7 @@ class MainActivity : AppCompatActivity() {
         tvOsdPosition = findViewById(R.id.tv_osd_position)
         tvOsdDuration = findViewById(R.id.tv_osd_duration)
         surfaceView = findViewById(R.id.surface_view)
+        subtitleView = findViewById(R.id.subtitle_view)
 
         findViewById<View>(R.id.btn_settings).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
@@ -204,6 +213,7 @@ class MainActivity : AppCompatActivity() {
         videoLayer.setOnClickListener {
             if (isCasting) showOsd()
         }
+        videoLayer.setOnLongClickListener { if (isCasting) { showPlaybackOptions(); true } else false }
         videoLayer.isClickable = false
         videoLayer.isFocusable = false
 
@@ -242,36 +252,49 @@ class MainActivity : AppCompatActivity() {
         val containerH = videoLayer.height
         if (containerW <= 0 || containerH <= 0) return
 
-        val targetW: Int
-        val targetH: Int
-        if (videoAspect <= 0f) {
-            targetW = containerW
-            targetH = containerH
+        val mode = app.store.pictureMode()
+        val dimensions = boundProtocol?.let { (app.registry.byId(it) as? VideoOutput)?.videoDimensions() } ?: (0 to 0)
+        val ratio = videoAspect.takeIf { it > 0 } ?: (containerW.toFloat() / containerH)
+        val width: Int
+        val height: Int
+        if (mode == com.casthub.core.PictureMode.ORIGINAL && dimensions.second > 0) {
+            height = dimensions.second
+            width = (height * ratio).roundToInt()
         } else {
-            val containerAspect = containerW.toFloat() / containerH
-            if (videoAspect > containerAspect) {
-                // 视频比屏幕更宽：以宽为准，上下留黑边
-                targetW = containerW
-                targetH = (containerW / videoAspect).roundToInt()
-            } else {
-                // 视频比屏幕更高（竖屏）：以高为准，左右留黑边
-                targetW = (containerH * videoAspect).roundToInt()
-                targetH = containerH
-            }
+            val useWidth = if (mode == com.casthub.core.PictureMode.FILL) ratio < containerW.toFloat() / containerH
+                           else ratio > containerW.toFloat() / containerH
+            width = if (useWidth) containerW else (containerH * ratio).roundToInt()
+            height = if (useWidth) (containerW / ratio).roundToInt() else containerH
         }
+        surfaceView.layoutParams = FrameLayout.LayoutParams(width.coerceAtLeast(1), height.coerceAtLeast(1), Gravity.CENTER)
+        subtitleView.layoutParams = FrameLayout.LayoutParams(minOf(width, containerW).coerceAtLeast(1), minOf(height, containerH).coerceAtLeast(1), Gravity.CENTER)
+    }
 
-        val current = surfaceView.layoutParams as? FrameLayout.LayoutParams
-        if (current != null && current.width == targetW && current.height == targetH) return
-        surfaceView.layoutParams =
-            FrameLayout.LayoutParams(targetW, targetH, Gravity.CENTER)
+    private fun renderSubtitles(cues: List<androidx.media3.common.text.Cue>) {
+        subtitleView.setApplyEmbeddedFontSizes(false)
+        subtitleView.setFractionalTextSize(0.0533f * app.store.subtitleSize() / 100)
+        subtitleView.setCues(cues.map { cue ->
+            if (cue.text == null) cue else cue.buildUpon()
+                .setLine(1f - app.store.subtitleBottom() / 100f, androidx.media3.common.text.Cue.LINE_TYPE_FRACTION)
+                .setLineAnchor(androidx.media3.common.text.Cue.ANCHOR_TYPE_END).build()
+        })
+    }
+    private fun showPictureSettings() {
+        PlaybackSettings.show(this) {
+            relayoutVideoSurface()
+            val output = boundProtocol?.let { app.registry.byId(it) as? VideoOutput }
+            renderSubtitles(output?.subtitleCues?.value.orEmpty())
+            activeControl()?.refreshSubtitleTiming()
+        }
     }
 
     /** 从各模块读当前画面的宽高比；变化时才重新摆放。 */
+    private var lastDimensions = 0 to 0
     private fun syncVideoAspect() {
-        val ratio = app.modules.firstNotNullOfOrNull { module ->
-            (module as? VideoOutput)?.videoAspectRatio()?.takeIf { it > 0f }
-        } ?: 0f
-        if (ratio == videoAspect) return
+        val ratio = boundProtocol?.let { (app.registry.byId(it) as? VideoOutput)?.videoAspectRatio() } ?: 0f
+        val dimensions = boundProtocol?.let { (app.registry.byId(it) as? VideoOutput)?.videoDimensions() } ?: (0 to 0)
+        if (ratio == videoAspect && dimensions == lastDimensions) return
+        lastDimensions = dimensions
         videoAspect = ratio
         relayoutVideoSurface()
     }
@@ -305,20 +328,70 @@ class MainActivity : AppCompatActivity() {
 
     /** 把 Surface 交给所有支持视频输出的模块。 */
     private fun attachSurface(surface: Surface?) {
+        val activeId = app.coordinator.sessions.value.firstOrNull {
+            it.media != null && (it.state.isActive || it.state == PlaybackState.ERROR)
+        }?.protocolId
+        if (boundSurface === surface && boundProtocol == activeId) return
+        boundSurface = surface
+        boundProtocol = activeId
         app.modules.forEach { module ->
-            runCatching { (module as? VideoOutput)?.attachSurface(surface) }
+            runCatching { (module as? VideoOutput)?.attachSurface(if (activeId == null || activeId == module.id) surface else null) }
                 .onFailure { CastLogger.w(TAG, "${module.displayName} 绑定 Surface 失败", it) }
         }
     }
 
+    private var boundSurface: Surface? = null
+    private var boundProtocol: String? = null
+
+    private var takeoverDialog: AlertDialog? = null
     private fun observeState() {
+        lifecycleScope.launch {
+            app.takeoverPrompt.collect { prompt ->
+                takeoverDialog?.dismiss()
+                takeoverDialog = null
+                if (prompt != null) takeoverDialog = AlertDialog.Builder(this@MainActivity)
+                    .setTitle("新的投屏请求")
+                    .setMessage("${prompt.protocolId} · ${prompt.peer} 请求接管当前播放。20 秒内未确认将拒绝。")
+                    .setPositiveButton("允许接管") { _, _ -> app.answerTakeover(prompt, true) }
+                    .setNegativeButton("拒绝") { _, _ -> app.answerTakeover(prompt, false) }
+                    .setOnCancelListener { app.answerTakeover(prompt, false) }
+                    .create().also { it.show() }
+            }
+        }
+
         app.modules.forEach { module ->
             lifecycleScope.launch {
                 module.state.collect { renderHome() }
             }
+            lifecycleScope.launch {
+                module.events.collect { event ->
+                    if (event is CastEvent.PositionChanged && boundProtocol == module.id) {
+                        if (osdPanel.visibility == View.VISIBLE) updateProgress()
+                        syncVideoAspect()
+                    }
+                }
+            }
+            (module as? VideoOutput)?.subtitleCues?.let { cues ->
+                lifecycleScope.launch {
+                    cues.collect { if (boundProtocol == module.id) renderSubtitles(it) }
+                }
+            }
         }
         lifecycleScope.launch {
             app.coordinator.sessions.collect { renderSessions(it) }
+        }
+        lifecycleScope.launch {
+            app.coordinator.latestError.collect { error ->
+                if (error != null) {
+                    app.coordinator.clearError()
+                    val control = activeControl()
+                    val dialog = AlertDialog.Builder(this@MainActivity).setTitle("投屏失败")
+                        .setMessage(error.message).setNegativeButton("关闭", null)
+                        .setNeutralButton("诊断") { _, _ -> Diagnostics.show(this@MainActivity) }
+                    if (control != null) dialog.setPositiveButton("重试") { _, _ -> control.retryPlayback() }
+                    dialog.show()
+                }
+            }
         }
     }
 
@@ -407,7 +480,11 @@ class MainActivity : AppCompatActivity() {
     // ─────────────────────── 投屏态渲染 ───────────────────────
 
     private fun renderSessions(sessions: List<CastSession>) {
-        val active = sessions.filter { it.state.isActive }
+        offerResume()
+        attachSurface(surfaceView.holder.surface.takeIf { it.isValid })
+        val output = boundProtocol?.let { app.registry.byId(it) as? VideoOutput }
+        renderSubtitles(output?.subtitleCues?.value.orEmpty())
+        val active = sessions.filter { it.media != null && (it.state.isActive || it.state == PlaybackState.ERROR) }
         val nowCasting = active.isNotEmpty()
 
         // 只在"进入/退出投屏"这个边界上做切换动作。
@@ -502,9 +579,7 @@ class MainActivity : AppCompatActivity() {
         // 只取**真正在播**的那个模块：多个协议模块都实现了本地控制，
         // 按列表顺序取第一个会拿到空闲的 DLNA（时长为 0），
         // 结果投屏中进度条反而不显示。
-        val progress = app.modules.firstNotNullOfOrNull { module ->
-            (module as? LocalPlaybackControl)?.currentProgress()?.takeIf { it.durationMs > 0L }
-        }
+        val progress = activeControl()?.currentProgress()
 
         val duration = progress?.durationMs ?: 0L
         if (progress == null || duration <= 0L) {
@@ -553,6 +628,7 @@ class MainActivity : AppCompatActivity() {
      * [renderSessions] 自然会退回待机屏。
      */
     private fun stopCasting() {
+        CastLogger.d(TAG, "主界面请求结束投屏")
         // 多协议并存时不能用 canSeek / currentProgress 去挑：DLNA 模块即使空闲
         // 也会返回非空的进度（播放器常驻），挑出来的是它，结果 AirPlay 正在播
         // 却按了退出没反应。两个实现的 stopCasting 都在没有会话时返回 false
@@ -587,6 +663,15 @@ class MainActivity : AppCompatActivity() {
      */
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (isCasting) {
+            if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                showPlaybackOptions()
+                return true
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
+                activeControl()?.togglePause()
+                showOsd()
+                return true
+            }
             if (keyCode == KeyEvent.KEYCODE_MEDIA_STOP) {
                 handleExitKey()
                 return true
@@ -607,10 +692,7 @@ class MainActivity : AppCompatActivity() {
     /** @return 是否已消费本次按键（投屏态下方向键一律不继续往下传） */
     private fun seekBy(deltaMs: Long): Boolean {
         // 同理：快进要作用在正在播的那个模块上，而不是列表里的第一个
-        val controls = app.modules.mapNotNull { it as? LocalPlaybackControl }
-        val control = controls.firstOrNull { it.canSeek }
-            ?: controls.firstOrNull()
-            ?: return false
+        val control = activeControl() ?: return false
 
         if (!control.seekBy(deltaMs)) {
             showOsd(getString(R.string.osd_cannot_seek))
@@ -628,6 +710,74 @@ class MainActivity : AppCompatActivity() {
         // 否则按键之后进度条要过一拍才动，手感很差
         updateProgress()
         return true
+    }
+
+    private fun activeControl(): LocalPlaybackControl? {
+        val session = app.coordinator.sessions.value.firstOrNull { it.media != null && it.state.isActive }
+            ?: app.coordinator.sessions.value.firstOrNull { it.media != null }
+            ?: return null
+        return app.registry.byId(session.protocolId) as? LocalPlaybackControl
+    }
+
+    private var subtitleTarget: String? = null
+    private fun activeMediaKey(): String? = app.coordinator.sessions.value.firstOrNull { it.media != null && it.state.isActive }
+        ?.let { it.protocolId + ":" + it.media!!.uri }
+    @Deprecated("Activity result compatibility")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != 145 || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        if (activeMediaKey() != subtitleTarget) return
+        val name = runCatching { contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+            if (it.moveToFirst()) it.getString(0) else ""
+        } }.getOrNull().orEmpty()
+        if (!name.endsWith(".srt", true) && !name.endsWith(".vtt", true)) {
+            android.widget.Toast.makeText(this, "请选择 .srt 或 .vtt 字幕文件", android.widget.Toast.LENGTH_LONG).show(); return
+        }
+        activeControl()?.let { PlaybackExtras.load(this, it, uri.toString(), name.endsWith(".vtt", true)) }
+    }
+    private var resumeDialog: AlertDialog? = null
+    private var resumeMediaKey: String? = null
+    private var askedResume = ""
+    private fun offerResume() {
+        val key = activeMediaKey()
+        if (resumeMediaKey != key) { resumeDialog?.dismiss(); resumeDialog = null; resumeMediaKey = key }
+        if (!lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) || !app.store.historyEnabled()) return
+        val control = activeControl() ?: return
+        val record = control.resumeCandidate() ?: return
+        val promptKey = "$key:${record.updated}"
+        if (key == null || askedResume == promptKey || !control.canSeek || record.positionMs >= (control.currentProgress()?.durationMs ?: 0) - 3000) return
+        askedResume = promptKey
+        resumeDialog?.dismiss()
+        resumeDialog = AlertDialog.Builder(this).setTitle("继续上次播放？")
+            .setMessage("上次看到 ${formatTime(record.positionMs)}。手机已指定进度的投屏不会显示此提示。")
+            .setPositiveButton("继续播放") { _, _ -> if (activeMediaKey() == key && control.resumeCandidate()?.updated == record.updated) control.seekAbsolute(record.positionMs) }
+            .setNegativeButton("保持当前进度", null).create().also { it.show() }
+    }
+
+    private fun showPlaybackOptions() {
+        val control = activeControl() ?: return
+        val tracks = control.tracks()
+        AlertDialog.Builder(this).setTitle("播放选项")
+            .setItems((listOf("暂停 / 继续", "重新加载视频", "结束投屏", "播放队列", "画面 / 字幕设置", "播放质量诊断", "外部字幕", "音轨与字幕偏好", "播放历史") + tracks.map { it.label }).toTypedArray()) { _, index ->
+                when (index) {
+                    0 -> control.togglePause()
+                    1 -> control.retryPlayback()
+                    2 -> stopCasting()
+                    3 -> PlaybackQueueUi.show(this, control)
+                    4 -> showPictureSettings()
+                    5 -> AlertDialog.Builder(this).setTitle("播放质量诊断").setMessage(control.playbackDiagnostics()).setPositiveButton("关闭", null).show()
+                    6 -> PlaybackExtras.externalMenu(this, control) {
+                        subtitleTarget = activeMediaKey()
+                        runCatching { startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE); type = "*/*"; addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }, 145) }.onFailure { android.widget.Toast.makeText(this, "没有可用的文件选择器，请使用字幕地址", android.widget.Toast.LENGTH_LONG).show() }
+                    }
+                    7 -> PlaybackExtras.preferences(this)
+                    8 -> PlaybackExtras.history(this)
+                    else -> control.selectTrack(tracks[index - 9])
+                }
+            }.setNegativeButton("关闭", null).show()
     }
 
     private fun formatTime(ms: Long): String {

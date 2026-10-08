@@ -86,6 +86,8 @@ class AirPlayModule(private val appContext: Context) :
 
     private val _sessions = MutableStateFlow<List<CastSession>>(emptyList())
     override val sessions: StateFlow<List<CastSession>> = _sessions.asStateFlow()
+    private val _subtitleCues = MutableStateFlow<List<androidx.media3.common.text.Cue>>(emptyList())
+    override val subtitleCues = _subtitleCues.asStateFlow()
 
     private val _events = MutableSharedFlow<CastEvent>(extraBufferCapacity = 32)
     override val events: SharedFlow<CastEvent> = _events.asSharedFlow()
@@ -113,7 +115,10 @@ class AirPlayModule(private val appContext: Context) :
      * 只能有一条生效，所以统一存一个"怎么停"，避免状态字段与实际不符。
      */
     private var stopAdvertising: (() -> Unit)? = null
+    @Volatile
     private var activeSession: CastSession? = null
+
+    var playbackTransaction: ((com.casthub.core.PlaybackRequest, () -> Unit) -> Unit)? = null
 
     /** 纯 Kotlin 实现，无 native 依赖，恒定可用。 */
     override fun checkAvailability(): Availability = Availability.Available
@@ -135,7 +140,7 @@ class AirPlayModule(private val appContext: Context) :
         }
         _state.value = ModuleState.Starting
 
-        val ip = Net.localIpv4()
+        val ip = com.casthub.core.LanAddress.ipv4(appContext)
         if (ip == null) {
             fail("未找到局域网 IPv4 地址，请确认已连接 Wi-Fi")
             return
@@ -146,6 +151,7 @@ class AirPlayModule(private val appContext: Context) :
                 setSurface(currentSurface)
                 onStateChanged = { handlePlayerState() }
                 onError = { message -> handleError("AirPlay 播放失败：$message", null) }
+                onCues = { _subtitleCues.value = it }
                 // 播完：按设置页选定的模式接下一条（顺序/循环）。
                 // AirPlay 没有 SetNextAVTransportURI 那样的"下一条"机制，
                 // 所以完全靠电视端自己记住放过的条目。
@@ -158,6 +164,8 @@ class AirPlayModule(private val appContext: Context) :
             val server = AirPlayHttpServer(AIRPLAY_PORT, announce, deviceName).apply {
                 sink = createSink(playback)
             }
+            player = playback
+            http = server
             if (!server.start()) {
                 playback.release()
                 fail("AirPlay 控制服务启动失败（端口 ${server.actualPort} 被占用且无法改用其它端口）")
@@ -221,10 +229,15 @@ class AirPlayModule(private val appContext: Context) :
     private fun createSink(playback: AirPlayPlayer): AirPlaySink = object : AirPlaySink {
 
         override fun onPlay(url: String, startPositionSec: Double, peerAddress: String) {
+            val action = { beginPlayback(playback, url, startPositionSec, peerAddress) }
+            playbackTransaction?.invoke(com.casthub.core.PlaybackRequest(peerAddress, url), action) ?: action()
+        }
+
+        private fun beginPlayback(playback: AirPlayPlayer, url: String, startPositionSec: Double, peerAddress: String) {
             val media = MediaInfo(
                 uri = url,
                 title = null,
-                startPositionMs = (startPositionSec * 1000).toLong().coerceAtLeast(0),
+                startPositionMs = 0,
             )
             // iPhone 几乎总是紧接着发 /volume?volume=1.0，
             // 必须先把用户当前的音量锁成上限，否则一投屏就被顶到 100%
@@ -326,14 +339,16 @@ class AirPlayModule(private val appContext: Context) :
         }
         val p = player ?: return
         CastLogger.i(TAG, "单曲循环：重播 ${again.media.uri.take(60)}")
-        p.seek(0.0)
-        p.resume()
+        if (queue.mode == com.casthub.core.PlaybackMode.REPEAT_ONE) {
+            p.seek(0.0)
+            p.resume()
+        } else playQueueEntry(again)
     }
 
     // ─────────────────── 接收端本地控制（电视遥控器） ───────────────────
 
     override val canSeek: Boolean
-        get() = activeSession != null && (player?.durationMs() ?: 0) > 0
+        get() = activeSession != null && player?.canSeekNow() == true
 
     override fun seekBy(deltaMs: Long): Boolean {
         val p = player ?: return false
@@ -376,6 +391,61 @@ class AirPlayModule(private val appContext: Context) :
         )
     }
 
+    override fun setPlaying(play: Boolean): Boolean {
+        val p = player ?: return false
+        if (activeSession == null) return false
+        if (play) p.resume() else p.pause()
+        return true
+    }
+    override fun togglePause(): Boolean {
+        val p = player ?: return false
+        if (activeSession == null) return false
+        if (p.wantsToPlay()) p.pause() else p.resume()
+        return true
+    }
+
+    override fun retryPlayback(): Boolean {
+        val media = activeSession?.media ?: return false
+        player?.play(media.uri, 0.0, media.title, resumePositionMs = player?.positionMs() ?: 0L) ?: return false
+        return true
+    }
+
+    override fun tracks() = player?.tracks().orEmpty()
+    override fun selectTrack(choice: com.casthub.core.MediaTrackChoice) = player?.selectTrack(choice) ?: false
+
+    override fun queueEntries() = queue.entries()
+    override fun videoDimensions() = player?.videoDimensions() ?: (0 to 0)
+    override fun queueCurrentId() = queue.current?.id
+    override fun queueAdd(media: MediaInfo) = runCatching { queue.add(media); true }.getOrDefault(false)
+    override fun queuePlay(id: String) = queue.select(id)?.let { playQueueEntry(it); true } ?: false
+    override fun queueStep(delta: Int) = queue.step(delta)?.let { playQueueEntry(it); true } ?: false
+    override fun queueMove(id: String, delta: Int) = queue.move(id, delta)
+    override fun queueRemove(id: String): Boolean {
+        if (queue.current?.id == id) {
+            val another = queue.entries().firstOrNull { it.id != id } ?: run { stopCasting(); return true }
+            queue.select(another.id)
+            playQueueEntry(another)
+        }
+        return queue.remove(id)
+    }
+    private fun playQueueEntry(entry: PlaybackQueue.Entry) {
+        val session = activeSession ?: return
+        activeSession = session.copy(media = entry.media, state = PlaybackState.BUFFERING)
+        publishSessions()
+        tryEmit(CastEvent.MediaChanged(session.id, ID, entry.media))
+        player?.play(entry.media.uri, 0.0, entry.media.title)
+    }
+    override fun playbackDiagnostics() = player?.playbackDiagnostics() ?: "播放器未启动"
+    override fun resumeCandidate() = player?.resumeCandidate()
+    override fun applyTrackPreferences() { player?.applyTrackPreferences() }
+    override fun externalSubtitle(address: String?, mimeType: String) = player?.externalSubtitle(address, mimeType) ?: false
+    override fun seekAbsolute(positionMs: Long): Boolean {
+        if (!canSeek) return false
+        player?.seek(positionMs / 1000.0)
+        return true
+    }
+    override fun refreshSubtitleTiming() { player?.refreshSubtitleTiming() }
+
     // ─────────────────── 内部工具 ───────────────────
 
     private fun publishSessions() {
@@ -412,8 +482,11 @@ class AirPlayModule(private val appContext: Context) :
 
         activeSession = null
         _sessions.value = emptyList()
+        queue.clear()
+        volumeGovernor.reset()
         currentIp = ""
         currentPort = 0
+        _subtitleCues.value = emptyList()
     }
 
     // 设备标识 / 配对公钥 / 配对标识统一由 AirPlayIdentity 提供，

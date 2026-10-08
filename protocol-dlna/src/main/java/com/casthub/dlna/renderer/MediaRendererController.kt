@@ -57,19 +57,24 @@ class MediaRendererController(
      * 而顺序/循环播放恰恰要在"放完"这一刻决定要不要接下一条。
      */
     private val onEnded: () -> Unit = {},
+    private val onCues: (List<androidx.media3.common.text.Cue>) -> Unit = {},
 ) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var player: ExoPlayer? = null
+    private val support = com.casthub.core.PlaybackSupport(context)
+    private var httpFactory: DefaultHttpDataSource.Factory? = null
     private var progressJob: Job? = null
     private var currentMedia: MediaInfo? = null
     private var pendingSurface: Surface? = null
     private var pendingSeekMs: Long = 0L
+    private val recovery = com.casthub.core.PlaybackRecovery { com.casthub.core.ModuleEnabledStore(context).autoRetry() }
 
     /** 供 HTTP 线程读取的进度缓存（仅在主线程写入）。 */
     @Volatile
     private var cachedPositionMs: Long = 0L
+    @Volatile private var cachedSeekable = false
 
     @Volatile
     private var cachedDurationMs: Long = -1L
@@ -82,6 +87,7 @@ class MediaRendererController(
      */
     @Volatile
     private var cachedAspectRatio: Float = 0f
+    private var dimensions = 0 to 0
 
     @Volatile
     var state: PlaybackState = PlaybackState.IDLE
@@ -102,13 +108,22 @@ class MediaRendererController(
     /** 打开媒体。对应 DLNA 的 SetAVTransportURI；实际起播等 Play 指令。 */
     fun open(media: MediaInfo) {
         onMain("open") {
+            support.save(player)
+            support.open(media.uri, media.title, media.startPositionMs > 0)
+            cachedSeekable = false
+            recovery.reset()
+            onCues(emptyList())
             CastLogger.i(TAG, "打开媒体: ${media.title ?: media.uri} (hls=${media.isHls})")
             currentMedia = media
+            cachedAspectRatio = 0f
+            dimensions = 0 to 0
             cachedDurationMs = media.durationMs
             cachedPositionMs = media.startPositionMs
             pendingSeekMs = media.startPositionMs
 
             val p = ensurePlayer()
+            support.applyPreferences(p)
+            httpFactory?.setDefaultRequestProperties(media.httpHeaders)
             val item = MediaItem.Builder()
                 .setUri(Uri.parse(media.uri))
                 .apply { media.effectiveMimeType?.let { setMimeType(it) } }
@@ -136,6 +151,11 @@ class MediaRendererController(
 
     fun stop() {
         onMain("stop") {
+            support.save(player)
+            support.resetWatchdog()
+            cachedSeekable = false
+            recovery.reset()
+            onCues(emptyList())
             player?.stop()
             player?.clearMediaItems()
             currentMedia = null
@@ -149,6 +169,7 @@ class MediaRendererController(
 
     fun seekTo(positionMs: Long) {
         onMain("seek") {
+            support.resetWatchdog()
             player?.seekTo(positionMs.coerceAtLeast(0L))
             cachedPositionMs = positionMs.coerceAtLeast(0L)
         }
@@ -158,6 +179,8 @@ class MediaRendererController(
         progressJob?.cancel()
         progressJob = null
         onMain("release") {
+            support.save(player)
+            recovery.cancel()
             runCatching {
                 player?.setVideoSurface(null)
                 player?.release()
@@ -179,9 +202,21 @@ class MediaRendererController(
 
     /** 画面应有宽高比（宽 ÷ 高）；未知返回 0，由界面按铺满处理。 */
     fun videoAspectRatio(): Float = cachedAspectRatio
+    fun videoDimensions() = dimensions
 
     fun currentPosition(): PlaybackPosition =
         PlaybackPosition(cachedPositionMs, duration(), state)
+
+    fun retry() = onMain("retry") {
+        val media = currentMedia ?: return@onMain
+        val position = cachedPositionMs
+        open(media.copy(startPositionMs = position))
+        play()
+    }
+    fun refreshSubtitleTiming() = onMain("subtitleTiming") { player?.let { it.seekTo(it.currentPosition) } }
+
+    fun tracks() = com.casthub.core.PlaybackTracks.choices(player)
+    fun selectTrack(choice: com.casthub.core.MediaTrackChoice) = support.select(player, choice)
 
     // ─────────────────────── 音量（系统媒体音量） ───────────────────────
 
@@ -252,21 +287,26 @@ class MediaRendererController(
         player?.let { return it }
 
         // 直链常带防盗链校验，统一注入请求头
-        val httpFactory = DefaultHttpDataSource.Factory()
+        val sourceFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(USER_AGENT)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(20_000)
             .setAllowCrossProtocolRedirects(true)
             .setDefaultRequestProperties(currentMedia?.httpHeaders ?: emptyMap())
+        httpFactory = sourceFactory
 
-        val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
+        val dataSourceFactory = DefaultDataSource.Factory(context, sourceFactory)
         val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
 
-        val p = ExoPlayer.Builder(context)
+        val p = ExoPlayer.Builder(context, com.casthub.core.SubtitleRenderers(context))
             .setMediaSourceFactory(mediaSourceFactory)
             .build()
 
         p.addListener(object : Player.Listener {
+            override fun onCues(cueGroup: androidx.media3.common.text.CueGroup) {
+                CastLogger.d(TAG, "字幕更新：${cueGroup.cues.size}")
+                this@MediaRendererController.onCues(cueGroup.cues)
+            }
             override fun onPlaybackStateChanged(playbackState: Int) {
                 val mapped = when (playbackState) {
                     Player.STATE_IDLE -> PlaybackState.IDLE
@@ -292,6 +332,7 @@ class MediaRendererController(
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (p.playerError != null) return
                 val mapped = when {
                     isPlaying -> PlaybackState.PLAYING
                     state == PlaybackState.BUFFERING -> PlaybackState.BUFFERING
@@ -305,6 +346,7 @@ class MediaRendererController(
              * 直接输出到裸 Surface 时画面会被非等比拉伸填满（见 VideoOutput.videoAspectRatio）。
              */
             override fun onVideoSizeChanged(videoSize: VideoSize) {
+                dimensions = videoSize.width to videoSize.height
                 cachedAspectRatio = VideoAspect.of(
                     width = videoSize.width,
                     height = videoSize.height,
@@ -319,15 +361,12 @@ class MediaRendererController(
                 )
             }
 
-            override fun onPlayerError(error: PlaybackException) {
-                CastLogger.e(TAG, "播放错误: ${error.errorCodeName}", error)
-                updateState(PlaybackState.ERROR)
-                onError("播放错误: ${error.errorCodeName}", error)
-            }
+            override fun onPlayerError(error: PlaybackException) { handleFailure(p, error) }
         })
 
         pendingSurface?.let { p.setVideoSurface(it) }
         player = p
+        p.addAnalyticsListener(support)
         startProgressLoop()
         return p
     }
@@ -335,6 +374,7 @@ class MediaRendererController(
     /** 主线程：把播放器真实进度同步到缓存。 */
     private fun syncCacheFromPlayer(p: ExoPlayer) {
         runCatching {
+            cachedSeekable = p.isCurrentMediaItemSeekable
             cachedPositionMs = p.currentPosition
             val d = p.duration
             if (d > 0) cachedDurationMs = d
@@ -356,7 +396,7 @@ class MediaRendererController(
             while (true) {
                 delay(PROGRESS_INTERVAL_MS)
                 val snapshot = withContext(Dispatchers.Main) {
-                    player?.let { syncCacheFromPlayer(it) }
+                    player?.let { sampleSupport(it); syncCacheFromPlayer(it) }
                     PlaybackPosition(cachedPositionMs, duration(), state)
                 }
                 if (snapshot.state.isActive) {
@@ -366,6 +406,40 @@ class MediaRendererController(
         }
     }
 
+
+    private fun handleFailure(p: ExoPlayer, error: PlaybackException) {
+        CastLogger.e(TAG, "播放错误: ${error.errorCodeName}", error)
+        syncCacheFromPlayer(p)
+        val position = cachedPositionMs
+        if (recovery.schedule(error) {
+            val shouldPlay = p.playWhenReady
+            p.seekTo(position)
+            support.resetWatchdog()
+            p.prepare()
+            p.playWhenReady = shouldPlay
+        }) {
+            updateState(PlaybackState.BUFFERING)
+            return
+        }
+        updateState(PlaybackState.ERROR)
+        onError(com.casthub.core.PlaybackErrors.message(error), error)
+    }
+
+    private fun sampleSupport(p: ExoPlayer) {
+        if (support.sample(p, recovery.isPending)) {
+            com.casthub.core.CastLogger.w("PlaybackWatchdog", "检测到持续缓冲或进度冻结，进入有限重试")
+            val position = p.currentPosition
+            p.stop()
+            p.seekTo(position)
+            handleFailure(p, PlaybackException("播放长时间没有进展", null, PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT))
+        }
+    }
+    fun canSeekNow() = cachedSeekable
+    fun wantsToPlay() = player?.playWhenReady == true
+    fun playbackDiagnostics() = support.summary(player, recovery.attempts)
+    fun resumeCandidate() = support.resumeCandidate
+    fun applyTrackPreferences() { player?.let(support::applyPreferences) }
+    fun externalSubtitle(address: String?, mimeType: String) = support.externalSubtitle(player, address, mimeType)
     companion object {
         private const val TAG = "DlnaRenderer"
         private const val USER_AGENT = "CastHub/1.0 (Android; DLNA DMR)"

@@ -59,7 +59,7 @@ class SsdpServer(
             // 先拿多播锁再开 socket，确保 M-SEARCH 能被收到
             multicastLock.acquire()
 
-            val sock = MulticastSocket(null).apply {
+            val sock = MulticastSocket(null).also { socket = it }.apply {
                 reuseAddress = true
                 bind(InetSocketAddress(SSDP_PORT))
                 soTimeout = 1_000
@@ -83,6 +83,8 @@ class SsdpServer(
             CastLogger.i(TAG, "SSDP 已启动：$location")
         } catch (t: Throwable) {
             running = false
+            runCatching { socket?.close() }
+            socket = null
             multicastLock.release()
             CastLogger.e(TAG, "SSDP 启动失败", t)
             throw t

@@ -15,6 +15,26 @@ package com.casthub.core
  */
 interface LocalPlaybackControl {
 
+    fun togglePause(): Boolean = false
+    fun setPlaying(play: Boolean): Boolean = false
+    fun retryPlayback(): Boolean = false
+    fun tracks(): List<MediaTrackChoice> = emptyList()
+    fun selectTrack(choice: MediaTrackChoice): Boolean = false
+    fun queueEntries(): List<PlaybackQueue.Entry> = emptyList()
+    fun queueCurrentId(): String? = null
+    fun queueAdd(media: MediaInfo): Boolean = false
+    fun queuePlay(id: String): Boolean = false
+    fun queueRemove(id: String): Boolean = false
+    fun queueMove(id: String, delta: Int): Boolean = false
+    fun queueStep(delta: Int): Boolean = false
+    fun refreshSubtitleTiming() {}
+    fun refreshTransportSettings() {}
+    fun playbackDiagnostics(): String = "播放器未启动"
+    fun resumeCandidate(): HistoryEntry? = null
+    fun seekAbsolute(positionMs: Long): Boolean = false
+    fun applyTrackPreferences() {}
+    fun externalSubtitle(address: String?, mimeType: String): Boolean = false
+
     /**
      * 以当前位置为基准快进 / 快退。
      *
@@ -52,3 +72,5 @@ interface LocalPlaybackControl {
      */
     fun stopCasting(): Boolean
 }
+
+data class MediaTrackChoice(val label: String, val type: Int, val group: Int, val index: Int)

@@ -317,6 +317,32 @@
                     android:text="@string/action_clear_log" />
             </LinearLayout>
 
+            <TextView
+                android:id="@+id/btn_playback_settings"
+                style="@style/TextAction"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="播放与接管设置" />
+            <TextView
+                android:id="@+id/btn_diagnostics"
+                style="@style/TextAction"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="网络诊断 / 导出日志" />
+            <TextView
+                android:id="@+id/btn_sender"
+                style="@style/TextAction"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="投到其他设备" />
+
+            <TextView
+                android:id="@+id/btn_external_airplay"
+                style="@style/TextAction"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="AirPlay 镜像 / 音频（独立接收器）" />
+
             <!-- ============ 关于 ============ -->
             <TextView
                 style="@style/SectionTitle"
