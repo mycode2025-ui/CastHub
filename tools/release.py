@@ -191,27 +191,50 @@ def render_notes(source: Path, version: str, apk: Path, dry_run: bool) -> Path:
     return out
 
 
-def push_tag(version: str, dry_run: bool) -> None:
+def sync_remotes(version: str, dry_run: bool) -> list[str]:
+    """推送**当前分支**与 tag 到所有远端，返回推送成功的远端。
+
+    必须连分支一起推：只推 tag 的话，tag 会指向一个不在任何分支上的提交
+    （clone 下来在 main 上根本看不到这次发布的代码）。
+    **单个远端失败不中断整次发布** —— 比如 Gitee 仓库还没建好，
+    不该因此让 GitHub 那边也发不出去。
+    """
     tag = f"v{version}"
-    print(f"④ 打 tag {tag} 并推送到两个远端")
+    branch = run("git", "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
     remotes = [r.strip() for r in run("git", "remote").stdout.split() if r.strip()]
+    print(f"④ 推送分支 {branch} 与 tag {tag}")
+    if not remotes:
+        raise SystemExit("  没有任何远端，无法推送")
     if dry_run:
-        print(f"  将推送 {tag} 到：{', '.join(remotes) or '(无远端)'}")
-        return
+        print(f"  将推送到：{', '.join(remotes)}")
+        return remotes
+
     head_subject = run("git", "log", "-1", "--pretty=%s").stdout.strip()
     run("git", "tag", "-f", "-a", tag, "-m", f"CastHub {version}：{head_subject}")
+
+    pushed = []
     for remote in remotes:
-        run("git", "push", "-f", remote, tag)
-        print(f"  → {remote}")
+        branch_proc = run("git", "push", remote, branch, check=False)
+        tag_proc = run("git", "push", "-f", remote, tag, check=False)
+        if branch_proc.returncode == 0 and tag_proc.returncode == 0:
+            print(f"  → {remote}  ✓ 分支 + tag")
+            pushed.append(remote)
+        else:
+            failed = branch_proc if branch_proc.returncode != 0 else tag_proc
+            last = (failed.stderr or failed.stdout or "").strip().splitlines()
+            print(f"  → {remote}  ✗ 失败：{last[-1] if last else '未知原因'}")
+    if not pushed:
+        raise SystemExit("  所有远端都推送失败")
+    return pushed
 
 
-def publish_github(version: str, apk: Path, notes: Path, dry_run: bool) -> None:
+def publish_github(version: str, apk: Path, notes: Path, dry_run: bool) -> bool:
     tag = f"v{version}"
     title = f"CastHub {version}"
     print(f"⑤ GitHub Release（{GH_REPO}）")
     if dry_run:
         print(f"  将创建/更新 Release {tag} 并上传 {apk.name}")
-        return
+        return True
     exists = run("gh", "release", "view", tag, "--repo", GH_REPO,
                  "--json", "tagName", check=False)
     if exists.returncode == 0:
@@ -222,12 +245,18 @@ def publish_github(version: str, apk: Path, notes: Path, dry_run: bool) -> None:
         run("gh", "release", "upload", tag, str(apk), "--repo", GH_REPO, "--clobber")
         print("  已更新既有 Release")
     else:
-        run("gh", "release", "create", tag, str(apk), "--repo", GH_REPO,
-            "--title", title, "--notes-file", str(notes))
+        proc = run("gh", "release", "create", tag, str(apk), "--repo", GH_REPO,
+                   "--title", title, "--notes-file", str(notes), check=False)
+        if proc.returncode != 0:
+            print("  ✗", (proc.stderr or proc.stdout or "").strip()[:300])
+            return False
         print("  已创建 Release")
+    return True
 
 
-def publish_gitee(version: str, apk: Path, notes: Path, dry_run: bool) -> None:
+def publish_gitee(version: str, apk: Path, notes: Path, dry_run: bool) -> bool:
+    """@return 是否成功发布。拿不到令牌时返回 False 而不是中断 ——
+    GitHub 那边可能已经发好了，把整次发布判为失败会掩盖这个事实。"""
     tag = f"v{version}"
     print(f"⑥ Gitee Release（{GITEE_REPO}）")
     token = read_gitee_token()
@@ -235,12 +264,10 @@ def publish_gitee(version: str, apk: Path, notes: Path, dry_run: bool) -> None:
         print("  ✗ 找不到 Gitee 私人令牌，跳过。")
         print(f"    从 Gitee「设置 → 安全设置 → 私人令牌」生成（需 projects 权限），")
         print(f"    写入 {WORKSPACE / '.gitee_token'}，或设为环境变量 GITEE_TOKEN。")
-        if not dry_run:
-            raise SystemExit(2)
-        return
+        return False
     if dry_run:
         print(f"  将创建/更新 Release {tag} 并上传 {apk.name}")
-        return
+        return True
 
     body = notes.read_text(encoding="utf-8")
     existing = gitee_find_release(token, tag)
@@ -265,7 +292,7 @@ def publish_gitee(version: str, apk: Path, notes: Path, dry_run: bool) -> None:
         print(f"  创建 Release（HTTP {status}）")
         if status not in (200, 201):
             print("  ✗", text[:300])
-            raise SystemExit(3)
+            return False
         release_id = json.loads(text)["id"]
 
     status, text = gitee_request(
@@ -275,7 +302,8 @@ def publish_gitee(version: str, apk: Path, notes: Path, dry_run: bool) -> None:
     print(f"  上传 {apk.name}（HTTP {status}）")
     if status not in (200, 201):
         print("  ✗", text[:300])
-        raise SystemExit(4)
+        return False
+    return True
 
 
 def main() -> int:
@@ -303,12 +331,19 @@ def main() -> int:
         apk = stage(version)
 
     notes = render_notes(ROOT / args.notes, version, apk, args.dry_run)
-    push_tag(version, args.dry_run)
-    publish_github(version, apk, notes, args.dry_run)
-    publish_gitee(version, apk, notes, args.dry_run)
+    sync_remotes(version, args.dry_run)
+    github_ok = publish_github(version, apk, notes, args.dry_run)
+    gitee_ok = publish_gitee(version, apk, notes, args.dry_run)
 
     print()
-    print("完成。" if not args.dry_run else "（dry-run，未做任何改动）")
+    if args.dry_run:
+        print("（dry-run，未做任何改动）")
+        return 0
+    print(f"汇总：GitHub {'✅' if github_ok else '❌'}　Gitee {'✅' if gitee_ok else '⏭ 跳过'}")
+    if not github_ok:
+        return 1
+    if not gitee_ok:
+        print("（Gitee 未发布不影响 GitHub 侧；补上令牌后重跑本脚本即可，不会重复发布）")
     return 0
 
 
