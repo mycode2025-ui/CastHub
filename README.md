@@ -414,12 +414,23 @@ python tools/make_icon.py
 
 ```bash
 # 1) 改 app/build.gradle.kts 里的 appVersionCode / appVersionName（版本号唯一来源）
-# 2) 构建 + 跑单测
-./gradlew assembleRelease test
-# 3) 打 tag 并推送（tag 必须与 versionName 一致，升级检测靠它比较）
-git tag v1.4.0 && git push origin v1.4.0 && git push gitee v1.4.0
-# 4) 在 GitHub 与 Gitee 各自创建 Release，挂上 app-release.apk
+#    并更新 docs/RELEASE_NOTES.md
+# 2) 跑单测
+./gradlew test
+# 3) 一条命令发布到 GitHub 与 Gitee：构建 + 打 tag + 两站 Release + 挂 APK
+python tools/release.py --dry-run    # 先看要做什么，不产生任何改动
+python tools/release.py
 ```
+
+`tools/release.py` 依赖：`gh` 已登录（走 GitHub），以及 Gitee 私人令牌
+（写到外层工作目录的 `.gitee_token`，或设为环境变量 `GITEE_TOKEN`；需 projects 权限）。
+两者都不入库。
+
+> 为什么要脚本化：手动发布要重复做 6 件容易出错的事（改版本号、构建、算校验和、
+> 打 tag、推两个远端、在两站各建 Release 并上传附件）。其中任何一步写错 ——
+> 尤其是 **tag 与 `versionName` 不一致** —— 都会让应用内的升级检测给出错误结论，
+> 在用户侧表现为"提示有新版本、装完还是旧版本"，极难排查。
+> 校验和也由脚本计算，不让人手抄 —— 抄错等于把"校验"这件事变成误导。
 
 ---
 
