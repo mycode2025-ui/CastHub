@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      基础主题：兼容 Android 6.0，不使用 Material3 的动态色等新特性。
+      深色主题 —— 电视端长时间亮屏，深色可减少刺眼与烧屏风险。
+    -->
+    <style name="Theme.CastHub" parent="Theme.MaterialComponents.NoActionBar">
+        <item name="colorPrimary">@color/brand_primary</item>
+        <item name="colorPrimaryDark">@color/bg_root</item>
+        <item name="colorAccent">@color/brand_primary</item>
+        <!--
+          冷启动窗口背景。
+          给纯色会让启动期间看起来是"黑屏"；改成带品牌图标的启动画面，
+          首帧出来前就有内容可看（详见 drawable/splash.xml）。
+        -->
+        <item name="android:windowBackground">@drawable/splash</item>
+        <item name="android:statusBarColor" tools:targetApi="21">@color/bg_root</item>
+        <item name="android:navigationBarColor" tools:targetApi="21">@color/bg_root</item>
+        <item name="android:textColorPrimary">@color/text_primary</item>
+        <item name="android:textColorSecondary">@color/text_secondary</item>
+    </style>
+
+    <!-- ============ 字号层级（10-foot UI：正文不小于 18sp） ============ -->
+
+    <!-- 设备名：全屏最醒目的元素，用户要拿着手机在投屏列表里对照这个名字 -->
+    <style name="DisplayName">
+        <item name="android:textSize">44sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:letterSpacing">0.01</item>
+    </style>
+
+    <!-- 页面主标题 -->
+    <style name="Headline">
+        <item name="android:textSize">26sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/text_primary</item>
+    </style>
+
+    <!-- 正文 -->
+    <style name="BodyText">
+        <item name="android:textSize">18sp</item>
+        <item name="android:textColor">@color/text_secondary</item>
+        <item name="android:lineSpacingExtra">4dp</item>
+    </style>
+
+    <!-- 辅助说明 -->
+    <style name="CaptionText">
+        <item name="android:textSize">15sp</item>
+        <item name="android:textColor">@color/text_tertiary</item>
+        <item name="android:lineSpacingExtra">3dp</item>
+    </style>
+
+    <!-- 分区标题 -->
+    <style name="SectionTitle">
+        <item name="android:textSize">16sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/text_tertiary</item>
+        <item name="android:letterSpacing">0.08</item>
+        <item name="android:paddingTop">8dp</item>
+        <item name="android:paddingBottom">10dp</item>
+    </style>
+
+    <!-- ============ 容器 ============ -->
+
+    <style name="CardSurface">
+        <item name="android:background">@drawable/bg_card</item>
+        <item name="android:padding">20dp</item>
+    </style>
+
+    <!-- 可聚焦的卡片：电视遥控器移到上面时有明确高亮 -->
+    <style name="CardFocusable">
+        <item name="android:background">@drawable/bg_card_focusable</item>
+        <item name="android:padding">20dp</item>
+        <item name="android:focusable">true</item>
+        <item name="android:clickable">true</item>
+    </style>
+
+    <!-- 文字按钮（可聚焦） -->
+    <style name="TextAction">
+        <item name="android:background">@drawable/bg_text_action</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textSize">17sp</item>
+        <item name="android:paddingStart">20dp</item>
+        <item name="android:paddingEnd">20dp</item>
+        <item name="android:paddingTop">12dp</item>
+        <item name="android:paddingBottom">12dp</item>
+        <item name="android:focusable">true</item>
+        <item name="android:clickable">true</item>
+        <item name="android:gravity">center</item>
+    </style>
+
+    <style name="StateChip">
+        <item name="android:textSize">14sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:paddingStart">12dp</item>
+        <item name="android:paddingEnd">12dp</item>
+        <item name="android:paddingTop">5dp</item>
+        <item name="android:paddingBottom">5dp</item>
+    </style>
+</resources>

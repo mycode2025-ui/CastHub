@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  待机页 · 支持的投屏方式：分区标题 + 芯片。
+
+  芯片按模块真实状态动态填充（见 MainActivity.renderSupport），不写死文案 ——
+  否则会出现"界面写着支持、实际用不了"的信息不一致。
+
+  注意这里是**左对齐**（不是居中）：分区标题在设置页也一直是左对齐的，
+  而这一块的下面就是整宽的「怎么投屏」卡片；让标题和芯片都对齐到内容左边距，
+  整页才有统一的版心。此前这个标题被父容器的 center_horizontal 居中，
+  夹在居中的身份区与整宽卡片之间，看起来像"宽度不对"。
+
+  "哪个服务没开"**不在这里另起一行提示**，而是并进上面的状态卡片里去说 ——
+  电视上这一页的高度已经没有余量（见 home_identity.xml 与 values-w600dp/dimens.xml）。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingTop="@dimen/hero_support_top">
+
+    <TextView
+        style="@style/SectionTitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/home_support_title" />
+
+    <LinearLayout
+        android:id="@+id/ll_support"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal" />
+</LinearLayout>

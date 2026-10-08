@@ -1,0 +1,19 @@
+# 与其它仓库保持一致：入库统一 LF，避免 Windows/Linux 混用导致的整文件 diff
+* text=auto eol=lf
+
+# ── 例外：Windows 批处理必须是 CRLF ──
+# `gradlew.bat` 里用了 goto/label，LF-only 在部分 cmd.exe 版本上会报
+# "The syntax of the command is incorrect"，导致 Windows 上完全构建不了。
+*.bat text eol=crlf
+
+# ── 二进制：禁止任何转换与文本 diff ──
+*.jar binary
+*.jks binary
+*.keystore binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.apk binary
+*.zip binary

@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  待机页 · 身份区：品牌徽标 + 设备名 + 一句话说明 + 运行状态。
+
+  被 layout/activity_main.xml（窄屏：整页竖排）与 layout-w600dp/activity_main.xml
+  （宽屏/电视：左右两列）共同 include。拆出来的目的是**内容只写一份**：
+  两个配置只有"怎么摆放"不同，文字与控件完全一致，避免将来改文案时漏改一份。
+
+  尺寸全部走 @dimen（values / values-w600dp 两套值），因此这里不出现硬编码尺寸。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_horizontal"
+    android:orientation="vertical"
+    android:paddingTop="@dimen/hero_top">
+
+    <FrameLayout
+        android:layout_width="@dimen/hero_badge_size"
+        android:layout_height="@dimen/hero_badge_size"
+        android:background="@drawable/bg_brand_badge">
+
+        <ImageView
+            android:layout_width="@dimen/hero_badge_icon"
+            android:layout_height="@dimen/hero_badge_icon"
+            android:layout_gravity="center"
+            android:contentDescription="@string/app_name"
+            android:src="@drawable/ic_cast" />
+    </FrameLayout>
+
+    <!-- 设备名是视觉中心：用户要拿着手机在投屏列表里核对这个名字 -->
+    <TextView
+        android:id="@+id/tv_device_name"
+        style="@style/DisplayName"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/hero_name_top"
+        android:autoSizeMaxTextSize="@dimen/hero_name_max"
+        android:autoSizeMinTextSize="@dimen/hero_name_min"
+        android:autoSizeStepGranularity="2sp"
+        android:autoSizeTextType="uniform"
+        android:gravity="center"
+        android:maxLines="2"
+        android:textSize="@dimen/hero_name_text"
+        app:autoSizeMaxTextSize="@dimen/hero_name_max"
+        app:autoSizeMinTextSize="@dimen/hero_name_min"
+        app:autoSizeStepGranularity="2sp"
+        app:autoSizeTextType="uniform"
+        tools:text="客厅的电视" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/hero_hint_top"
+        android:gravity="center"
+        android:text="@string/home_device_hint"
+        android:textColor="@color/text_secondary"
+        android:textSize="@dimen/hero_hint_text" />
+
+    <!-- 运行状态：一句话说清"现在能不能被搜到" -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/hero_status_top"
+        android:background="@drawable/bg_card"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="20dp"
+        android:paddingTop="14dp"
+        android:paddingEnd="24dp"
+        android:paddingBottom="14dp">
+
+        <TextView
+            android:id="@+id/tv_status_dot"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="●"
+            android:textColor="@color/state_ok"
+            android:textSize="@dimen/hero_status_text" />
+
+        <TextView
+            android:id="@+id/tv_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:text="@string/home_status_ready"
+            android:textColor="@color/text_primary"
+            android:textSize="@dimen/hero_status_text" />
+    </LinearLayout>
+</LinearLayout>

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      深色色板。投屏接收端跑在电视上，观看距离 3m 左右且常在暗环境下使用，
+      浅色大面积白底会刺眼，因此整体采用深色。
+
+      说明：部分色名沿用旧命名（brand_surface / divider 等）以保持既有引用可用。
+    -->
+
+    <!-- 背景层次：根 → 卡片 → 上浮卡片 -->
+    <color name="bg_root">#0B0E14</color>
+    <color name="bg_surface">#151A23</color>
+    <color name="bg_surface_raised">#1D2431</color>
+    <color name="bg_scrim">#B8000000</color>
+
+    <color name="stroke_subtle">#243044</color>
+    <color name="stroke_focus">#4C86FF</color>
+
+    <!-- 品牌色。深色背景上整体提亮，保证对比度 ≥ 4.5:1 -->
+    <color name="brand_primary">#4C86FF</color>
+    <color name="brand_primary_dark">#2F6BFF</color>
+    <color name="brand_container">#16274A</color>
+
+    <!-- 文字层级 -->
+    <color name="text_primary">#F2F5FA</color>
+    <color name="text_secondary">#9BA6BA</color>
+    <color name="text_tertiary">#5E6A80</color>
+
+    <!-- 状态色 -->
+    <color name="state_ok">#34D399</color>
+    <color name="state_warn">#FBBF24</color>
+    <color name="state_error">#F87171</color>
+
+    <!-- 兼容旧引用 -->
+    <color name="brand_surface">@color/bg_surface</color>
+    <color name="brand_background">@color/bg_root</color>
+    <color name="divider">@color/stroke_subtle</color>
+
+    <color name="ic_launcher_background">#2F6BFF</color>
+</resources>

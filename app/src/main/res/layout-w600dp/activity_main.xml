@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  主页（待机屏）· 宽屏（可用宽度 ≥ 600dp）：电视、盒子、横屏手机。
+
+  与 layout/activity_main.xml 的唯一区别是**待机内容的摆放方式**：
+  这里把「怎么投屏」移到右侧一列，内容高度从"三块相加"变成"两列取高"。
+
+  ── 为什么必须这么做（实测）────────────────────────────────────────
+  1080p 电视通常是 320dpi，逻辑尺寸只有 **960×540dp**；扣掉顶栏/底栏/状态栏，
+  可滚区高度只剩 **356dp**（`home_scroll` 实测 713px @320dpi）。
+  而"身份区 + 支持的投屏方式 + 怎么投屏"竖着排、正文按 10-foot 下限 18sp 算，
+  最少需要约 400dp —— 竖排在这一屏上**根本装不下**：
+  实测「支持的投屏方式」只露出 37dp，芯片与整张「怎么投屏」卡片被排到可视区之外。
+
+  而主页**只有一个可聚焦元素（右上角「设置」）**，ScrollView 又不参与焦点，
+  遥控器没有任何东西可以把焦点移下去触发自动滚动 —— 结果就是这两块内容
+  在真实电视上**永远看不到**（连按 3 次方向键，坐标一格没动，已实测确认）。
+  横排两列把高度压到 ~306dp 后，一屏装得下，问题从根上消失。
+
+  内容本身（文字、控件、id）与窄屏版共用 home_identity / home_support / home_guide
+  三个 include，只在这里决定"怎么摆"，所以不会出现两份文案不一致。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_root"
+    tools:context=".MainActivity">
+
+    <!-- ==================== 底层：视频输出 ==================== -->
+    <FrameLayout
+        android:id="@+id/video_layer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000">
+
+        <SurfaceView
+            android:id="@+id/surface_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <LinearLayout
+            android:id="@+id/osd_panel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top"
+            android:background="@color/bg_scrim"
+            android:orientation="vertical"
+            android:paddingStart="40dp"
+            android:paddingTop="28dp"
+            android:paddingEnd="40dp"
+            android:paddingBottom="28dp"
+            android:visibility="gone"
+            tools:visibility="visible">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/osd_casting"
+                android:textColor="@color/state_ok"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tv_osd_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:textColor="@color/text_primary"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                tools:text="百变校巴 第十四季 第1集.mp4" />
+
+            <TextView
+                android:id="@+id/tv_osd_source"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="@color/text_secondary"
+                android:textSize="16sp"
+                tools:text="来自 Xiaomi 25113PN0EC" />
+
+            <ProgressBar
+                android:id="@+id/pb_osd_progress"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="8dp"
+                android:layout_marginTop="18dp"
+                android:max="1000"
+                android:progress="0"
+                android:progressDrawable="@drawable/progress_horizontal" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/tv_osd_position"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:textColor="@color/text_primary"
+                    android:textSize="16sp"
+                    tools:text="01:23" />
+
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <TextView
+                    android:id="@+id/tv_osd_duration"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:textColor="@color/text_tertiary"
+                    android:textSize="16sp"
+                    tools:text="13:05" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tv_osd_hint"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="@string/osd_hint_keys"
+                android:textColor="@color/text_tertiary"
+                android:textSize="14sp" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- ==================== 上层：待机欢迎屏（两列） ==================== -->
+    <LinearLayout
+        android:id="@+id/home_root"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/bg_root"
+        android:orientation="vertical">
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="@dimen/home_margin"
+            android:paddingTop="24dp"
+            android:paddingEnd="@dimen/home_margin">
+
+            <TextView
+                android:id="@+id/btn_settings"
+                style="@style/TextAction"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="end"
+                android:drawableStart="@drawable/ic_settings"
+                android:drawablePadding="10dp"
+                android:text="@string/home_settings" />
+        </FrameLayout>
+
+        <ScrollView
+            android:id="@+id/home_scroll"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:fillViewport="true"
+            android:focusable="false"
+            android:scrollbars="none">
+
+            <!-- 两列：左=身份区+支持方式，右=怎么投屏。取高而非相加 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="@dimen/home_margin"
+                android:paddingEnd="@dimen/home_margin"
+                android:paddingBottom="24dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <include
+                        layout="@layout/home_identity"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content" />
+
+                    <include
+                        layout="@layout/home_support"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content" />
+                </LinearLayout>
+
+                <Space
+                    android:layout_width="@dimen/home_column_gap"
+                    android:layout_height="1dp" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <include
+                        layout="@layout/home_guide"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/hero_guide_top" />
+                </LinearLayout>
+            </LinearLayout>
+        </ScrollView>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:paddingStart="@dimen/home_margin"
+            android:paddingTop="14dp"
+            android:paddingEnd="@dimen/home_margin"
+            android:paddingBottom="20dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/home_ip"
+                android:textColor="@color/text_tertiary"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/tv_ip"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:textColor="@color/text_secondary"
+                android:textSize="14sp"
+                tools:text="192.168.10.205" />
+
+            <TextView
+                android:id="@+id/tv_version"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="24dp"
+                android:textColor="@color/text_tertiary"
+                android:textSize="14sp"
+                tools:text="v1.2.1" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

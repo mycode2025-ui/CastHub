@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  设置页里的一个接收服务条目。
+
+  整行可聚焦、可点击来开关服务 —— 电视遥控器只有一个焦点，
+  让整行承载焦点比让小小的开关承载更容易操作，焦点高亮也更明显。
+  开关本身只作视觉指示，不单独接受焦点。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/row_root"
+    style="@style/CardFocusable"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginBottom="12dp"
+    android:gravity="center_vertical"
+    android:orientation="horizontal">
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/tv_module_name"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="@color/text_primary"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                tools:text="DLNA / UPnP" />
+
+            <TextView
+                android:id="@+id/tv_module_state"
+                style="@style/StateChip"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:background="@drawable/bg_chip_ok"
+                tools:text="运行中" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tv_module_detail"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:lineSpacingExtra="3dp"
+            android:textColor="@color/text_secondary"
+            android:textSize="16sp"
+            tools:text="通用投屏标准。夸克网盘、爱奇艺、腾讯视频、B 站等绝大多数手机 App 都用这条通道" />
+
+        <!--
+          该模块自己的监听端点。
+          多协议并存时各模块端口不同（DLNA 用系统分配的端口、AirPlay 用 7000），
+          只在页面底部显示一个端口会让排查的人以为那就是全部。
+        -->
+        <TextView
+            android:id="@+id/tv_module_endpoint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:fontFamily="monospace"
+            android:textColor="@color/text_tertiary"
+            android:textSize="14sp"
+            tools:text="监听 192.168.10.205:7000" />
+
+        <TextView
+            android:id="@+id/tv_module_hint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:lineSpacingExtra="3dp"
+            android:textColor="@color/state_warn"
+            android:textSize="14sp"
+            android:visibility="gone"
+            tools:text="缺少 libairplay-jni.so，需先集成 UxPlay"
+            tools:visibility="visible" />
+    </LinearLayout>
+
+    <androidx.appcompat.widget.SwitchCompat
+        android:id="@+id/switch_module"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="20dp"
+        android:clickable="false"
+        android:focusable="false" />
+</LinearLayout>

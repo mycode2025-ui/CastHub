@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">CastHub 投屏</string>
+    <string name="header_subtitle">多协议投屏接收端 · DLNA / AirPlay</string>
+
+    <!-- ================= 待机页 ================= -->
+
+    <!-- 设备名下方的一句说明：用户要拿着手机在投屏列表里对照这个名字 -->
+    <string name="home_device_hint">在手机的投屏列表中选择这个名字</string>
+
+    <string name="home_status_ready">接收服务已就绪，等待设备连接…</string>
+    <!--
+      部分服务未开启时**直接把是哪一项写进这句话**，而不是在下面再单开一行提示。
+      原因：1080p 电视（960×540dp）待机页可滚区只有 ~356dp，"状态卡片 + 芯片 + 引导卡片"
+      已经把它占满，再插一块内容就会被裁到只剩几个像素（实测 bounds 高 7px）。
+      而主页遥控器滚不动，被裁掉就等于永远看不到。
+      两句话说同一件事本来也冗余 —— 合成一句既省高度又没有信息损失。
+      「部分服务未开启」这种笼统说法没法告诉用户该开哪一项，所以必须点名。
+    -->
+    <string name="home_status_partial">「%1$s」未开启，对应投屏将搜不到本机</string>
+    <string name="home_status_off">接收服务未开启，手机将无法搜索到本设备</string>
+
+    <string name="home_support_title">支持的投屏方式</string>
+    <string name="home_support_none">无可用投屏方式，请到设置中开启</string>
+
+    <string name="home_howto_title">怎么投屏</string>
+    <string name="home_howto_body">在手机上打开要播放的 App（如夸克网盘、爱奇艺、腾讯视频），点播放页的「投屏」按钮，在设备列表里选本设备即可。播放、暂停、快进都在手机上操作。</string>
+
+    <string name="home_ip">本机地址</string>
+    <string name="home_settings">设置</string>
+    <!-- 版本号放主页底部弱色小字：报问题时用户能一眼读到，平时又不干扰 -->
+    <string name="home_version">v%1$s</string>
+
+    <!-- ================= 设置页 ================= -->
+
+    <string name="settings_title">设置</string>
+
+    <string name="settings_device_section">设备名称</string>
+    <string name="settings_device_desc">手机投屏列表里显示的名字，建议改成好记的，例如「客厅的电视」</string>
+
+    <string name="settings_service_section">接收服务</string>
+
+    <!-- 播放模式：顺序/循环由电视端执行，不依赖手机 App 是否有连播功能 -->
+    <string name="settings_playback_section">播放模式</string>
+    <!--
+      播放模式只留"单曲播放/单曲循环"两种。
+      原本还有"顺序播放/列表循环"，真机验证后删掉了：接收端拿不到播放列表
+      （手机投一集只发一个 URL，列表在手机 App 里），那两种模式永远不会生效。
+      摆一个不生效的选项比没有更糟 —— 用户会当成 bug。
+    -->
+    <string name="settings_playback_desc">一条播完后是否自动重播。连播与顺序播放请在手机投屏端选择，那里才有播放列表</string>
+    <string name="playback_mode_single">单曲播放</string>
+    <string name="playback_mode_repeat_one">单曲循环</string>
+    <!-- 投屏进行中不允许改模式：队列指针与新模式不一致，播完那一下的行为会难以预期 -->
+    <string name="playback_mode_busy">正在投屏，结束投屏后再切换播放模式</string>
+    <string name="settings_service_warning">关闭某项后，对应方式的投屏将无法搜索到本设备</string>
+
+    <string name="settings_network_section">网络信息</string>
+    <string name="settings_network_hint">每个接收服务各自监听不同的端口，手机端是按设备名搜索、不关心端口</string>
+    <string name="settings_log_section">运行日志</string>
+    <string name="settings_log_show">展开</string>
+    <string name="settings_log_hide">收起</string>
+    <string name="settings_log_desc">用于排查问题，正常情况下无需关注</string>
+
+    <string name="settings_about_section">关于</string>
+    <!-- 例：CastHub 1.2.1（构建 9） -->
+    <string name="settings_version">CastHub %1$s（构建 %2$d）</string>
+
+    <!-- ================= 版本更新 ================= -->
+
+    <string name="settings_update_row_title">检查更新</string>
+    <string name="settings_update_row_desc">从 GitHub 与 Gitee 上已发布的正式版本中检查</string>
+    <string name="action_check_update">检查</string>
+    <string name="action_checking">检查中…</string>
+
+    <string name="update_up_to_date_title">已是最新版本</string>
+    <string name="update_up_to_date">当前版本 v%1$s 已是最新。</string>
+    <string name="update_failed_title">检查更新失败</string>
+    <string name="update_available_title">发现新版本 %1$s</string>
+    <string name="update_from">当前版本：v%1$s\n新版本：%2$s</string>
+    <string name="update_source">版本信息来自 %1$s</string>
+    <string name="update_apk_from">安装包来自 %1$s</string>
+    <string name="update_apk_size">安装包大小：%1$s</string>
+    <string name="update_release_notes">更新说明：</string>
+    <string name="update_no_apk">该版本未附安装包，将打开发布页手动下载。</string>
+    <!-- 只要有一个数据源没取到，结论就可能是漏判，必须显式告知 -->
+    <string name="update_warnings_title">部分数据源未取到，结论可能不完整</string>
+
+    <string name="action_upgrade_now">立即升级</string>
+    <string name="action_later">稍后</string>
+    <string name="action_ignore_version">忽略此版本</string>
+    <string name="action_open_release_page">打开发布页</string>
+    <string name="action_install">安装</string>
+    <string name="action_go_settings">去设置</string>
+
+    <string name="update_downloading_title">下载中</string>
+    <string name="update_downloading">%1$s / %2$s</string>
+    <string name="update_downloading_unknown">已下载 %1$s</string>
+    <string name="update_download_failed_title">下载失败</string>
+    <string name="update_download_failed_hint">可以打开发布页，用浏览器手动下载安装包。</string>
+    <string name="update_no_installer">系统没有可用的安装程序，请打开发布页手动下载。</string>
+    <string name="update_no_browser">没有可打开链接的应用。发布页地址：\n%1$s</string>
+
+    <!--
+      签名校验是升级流程里唯一的安全关口，因此失败说明必须写清"这意味着什么"，
+      而不是一句"校验失败" —— 用户很可能直接去手动装那个包。
+    -->
+    <string name="update_verify_failed_title">安装包校验未通过</string>
+    <string name="update_verify_mismatch">下载到的安装包签名与本机不一致，已中止安装。\n\n本机签名：%1$s\n安装包签名：%2$s\n\n这说明该安装包不是本应用的官方构建，请不要手动安装它。</string>
+    <string name="update_verify_unreadable">无法读取安装包或本机的签名信息，已中止安装。</string>
+
+    <string name="update_ready_title">安装包已就绪</string>
+    <string name="update_ready_message">点「安装」后系统会弹出安装界面。若系统提示「禁止安装未知应用」，请先允许本应用安装。</string>
+    <string name="update_need_permission_title">需要先允许安装未知应用</string>
+    <string name="update_need_permission_message">系统要求先允许本应用安装其它应用。\n\n点「去设置」打开开关，回来后重新点一次「立即升级」即可。</string>
+
+    <string name="action_modify">修改</string>
+    <string name="action_change">切换</string>
+    <string name="action_back">返回</string>
+
+    <!-- ================= 投屏中 OSD ================= -->
+
+    <string name="osd_casting">正在投屏</string>
+    <string name="osd_from">来自 %1$s</string>
+
+    <!-- 平时显示的遥控器操作提示。退出路径必须写出来：
+         不写的话用户不知道返回键能结束投屏，只会觉得被困在全屏里 -->
+    <string name="osd_hint_keys">← → 快进 / 快退 10 秒　·　返回键结束投屏</string>
+    <string name="osd_seek_forward">⏩ 快进</string>
+    <string name="osd_seek_backward">⏪ 快退</string>
+    <!-- 例：⏩ 快进 10 秒。具体时间点交给进度条那一行显示，这里不重复 -->
+    <string name="osd_seek_feedback">%1$s %2$d 秒</string>
+    <string name="osd_cannot_seek">当前内容不支持拖动进度</string>
+
+    <!-- 第一次按返回键的提示。连按两次才真的结束，避免误触停掉投屏 -->
+    <string name="osd_press_again_to_exit">再按一次返回键，结束本次投屏</string>
+    <!-- 所有模块都报"没有会话"时的兜底提示：明说比让人对着画面连按强 -->
+    <string name="osd_cannot_exit">没有可结束的投屏会话，请在手机端停止</string>
+
+    <!-- ================= 通用 ================= -->
+
+    <string name="section_modules">协议模块</string>
+    <string name="section_session">当前投屏会话</string>
+    <string name="section_log">运行日志</string>
+
+    <string name="no_session">暂无投屏会话。请在手机 App（如夸克网盘、爱奇艺）中点击投屏，选择本设备。</string>
+    <string name="log_empty">暂无日志</string>
+
+    <string name="action_enable">启用</string>
+    <string name="action_disable">停用</string>
+    <string name="action_clear_log">清空</string>
+    <string name="action_rename">改名</string>
+    <string name="action_discover">搜索设备</string>
+
+    <string name="state_running">运行中</string>
+    <string name="state_stopped">已停止</string>
+    <string name="state_starting">启动中…</string>
+    <string name="state_failed">启动失败</string>
+    <string name="state_unavailable">不可用</string>
+
+    <string name="rename_title">修改设备名</string>
+    <string name="rename_hint">发送端设备列表中将显示此名称</string>
+    <!--
+      改名失败必须给出明确原因并重开对话框。
+      此前这三种情况都是"对话框静默关闭、什么都没发生"，
+      用户会以为已经改好了（尤其是与原名相同时，看上去"没变化"最像成功）。
+    -->
+    <string name="rename_empty">设备名不能为空</string>
+    <string name="rename_unchanged">设备名没有变化</string>
+    <string name="rename_too_long">设备名最多 %1$d 个字符，已截断为「%2$s」</string>
+
+    <!-- 模块行内展示该模块自己的监听端点（多协议时端口各不相同，只显示一个会误导） -->
+    <string name="module_endpoint">监听 %1$s:%2$d</string>
+    <string name="module_endpoint_none">未启动</string>
+
+    <string name="renderer_local">本机接收服务</string>
+    <string name="renderer_remote">发现的设备</string>
+    <string name="state_placeholder_device">设备名：%1$s</string>
+
+    <string name="notification_channel_name">投屏接收服务</string>
+    <string name="notification_channel_desc">保持接收端在后台持续可被发现</string>
+    <string name="notification_title">CastHub 正在接收投屏</string>
+    <string name="notification_text">保持本页在后台运行，手机端才能搜索到本设备</string>
+
+    <!-- 全屏播放 -->
+    <string name="fullscreen_entered">已进入全屏播放，按返回键查看信息</string>
+    <string name="fullscreen_exited">已退出全屏</string>
+</resources>

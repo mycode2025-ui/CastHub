@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 的可见范围。
+
+  只暴露 cacheDir/updates 这一个子目录 —— 升级包下载在那里，交给系统安装器时
+  通过 content:// 授予单个文件的读权限。
+  **绝不能**放开整个 cacheDir 或 filesDir：那等于把应用的私有目录对外敞开。
+-->
+<paths>
+    <cache-path
+        name="updates"
+        path="updates/" />
+</paths>

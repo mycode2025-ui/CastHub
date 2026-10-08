@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  宽屏（可用宽度 ≥ 600dp，覆盖电视、盒子、平板与横屏手机）。
+
+  用 w600dp 而不是 sw720dp：1080p 电视通常是 320dpi，可用宽度只有 960dp，
+  sw720dp 会直接失效；w600dp 对 720p(mdpi,1280dp) 与 1080p(xhdpi,960dp) 都能命中。
+
+  两件事：
+  1. `content_margin` 加大到 160dp —— 设置页是单栏正文，3 米观看距离下
+     铺满整屏会让单行塞进 60+ 汉字，读起来很累。
+  2. 待机页的纵向节奏整体压紧 ——
+     1080p 电视逻辑高度只有 **540dp**，扣掉顶栏/底栏/状态栏后可滚区仅 **356dp**
+     （`home_scroll` 实测 713px @320dpi）。按 10-foot 下限 18sp 排版，
+     "身份区 + 支持方式 + 引导卡片"竖排要 ~400dp，装不下；
+     配合 layout-w600dp 的两列版式把它压到 ~306dp 才进得了一屏。
+     ⚠️ 电视遥控器**滚不动**主页（页面上只有「设置」一个可聚焦元素，
+     ScrollView 不参与焦点），所以"装得进一屏"是硬要求，不是审美问题。
+-->
+<resources>
+    <dimen name="content_margin">160dp</dimen>
+
+    <!-- ============ 待机页 · 内容区 ============ -->
+    <!--
+      待机页用 96dp 而不是 160dp：这一页是两列版式，
+      160dp 边距下每列只剩 296dp，太窄；96dp 让每列有 368dp。
+    -->
+    <dimen name="home_margin">96dp</dimen>
+    <dimen name="home_column_gap">48dp</dimen>
+
+    <!-- ============ 待机页 · 身份区（整体收一档） ============ -->
+    <dimen name="hero_top">0dp</dimen>
+    <dimen name="hero_badge_size">52dp</dimen>
+    <dimen name="hero_badge_icon">28dp</dimen>
+    <dimen name="hero_name_top">8dp</dimen>
+    <!-- 36sp 在 960dp 宽屏上约占屏宽 3.8%，55 寸电视约 2cm 高，3 米外可读 -->
+    <dimen name="hero_name_text">36sp</dimen>
+    <dimen name="hero_name_min">24sp</dimen>
+    <dimen name="hero_name_max">38sp</dimen>
+    <dimen name="hero_hint_top">4dp</dimen>
+    <dimen name="hero_hint_text">16sp</dimen>
+    <dimen name="hero_status_top">10dp</dimen>
+    <dimen name="hero_status_text">17sp</dimen>
+
+    <!-- ============ 待机页 · 支持的投屏方式 ============ -->
+    <dimen name="hero_support_top">10dp</dimen>
+    <dimen name="hero_chip_text">16sp</dimen>
+
+    <!-- ============ 待机页 · 怎么投屏（右列，与左列顶部对齐） ============ -->
+    <dimen name="hero_guide_top">0dp</dimen>
+    <dimen name="guide_padding">20dp</dimen>
+    <dimen name="guide_title_text">19sp</dimen>
+    <dimen name="guide_body_text">16sp</dimen>
+</resources>

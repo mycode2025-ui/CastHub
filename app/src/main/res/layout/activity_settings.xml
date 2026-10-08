@@ -1,0 +1,386 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  设置页：收纳所有"配置类/诊断类"内容。
+  主页只放用户需要看的（设备名、状态、怎么投屏），协议开关与日志都在这里，
+  避免普通用户在主页误关接收服务后搜不到设备。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_root"
+    android:orientation="vertical">
+
+    <!-- 顶栏 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="@dimen/content_margin"
+        android:paddingTop="20dp"
+        android:paddingEnd="@dimen/content_margin"
+        android:paddingBottom="16dp">
+
+        <!-- 显式指定向下焦点：默认的几何查找会因为「返回」在左、「修改」在右而跳过它 -->
+        <ImageView
+            android:id="@+id/btn_back"
+            android:layout_width="52dp"
+            android:layout_height="52dp"
+            android:background="@drawable/bg_text_action"
+            android:clickable="true"
+            android:contentDescription="@string/action_back"
+            android:focusable="true"
+            android:nextFocusDown="@id/btn_rename"
+            android:padding="14dp"
+            android:src="@drawable/ic_back" />
+
+        <TextView
+            style="@style/Headline"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="18dp"
+            android:text="@string/settings_title" />
+    </LinearLayout>
+
+    <!--
+      注意：ScrollView 在 initScrollView() 里**硬编码调用了 setFocusable(true)**，
+      XML 上的 android:focusable="false" 会被它覆盖掉 —— 必须在代码里再关一次
+      （见 SettingsActivity.onCreate）。否则焦点会停在这个没有任何视觉反馈的容器上，
+      到最底部就再也下不去了。
+    -->
+    <ScrollView
+        android:id="@+id/settings_scroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:focusable="false"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="@dimen/content_margin"
+            android:paddingEnd="@dimen/content_margin"
+            android:paddingBottom="40dp">
+
+            <!-- ============ 设备名称 ============ -->
+            <TextView
+                style="@style/SectionTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/settings_device_section" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_card"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="22dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/tv_device_name"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:maxLines="1"
+                        android:textColor="@color/text_primary"
+                        android:textSize="24sp"
+                        android:textStyle="bold"
+                        tools:text="客厅的电视" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="@string/settings_device_desc"
+                        android:textColor="@color/text_tertiary"
+                        android:textSize="15sp" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/btn_rename"
+                    style="@style/TextAction"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="20dp"
+                    android:text="@string/action_modify" />
+            </LinearLayout>
+
+            <!-- ============ 播放模式 ============ -->
+            <!--
+              放在设置页而不是主页：它是"要不要连续播"的偏好，不是"现在能不能被搜到"
+              这种必须一眼看到的状态。整行可点，电视遥控器只有一个焦点，
+              承载焦点比只让右侧小字承载更好操作。
+            -->
+            <TextView
+                style="@style/SectionTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:text="@string/settings_playback_section" />
+
+            <LinearLayout
+                android:id="@+id/row_playback_mode"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_card_focusable"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:nextFocusDown="@id/ll_modules"
+                android:orientation="horizontal"
+                android:padding="22dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/tv_playback_mode"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/text_primary"
+                        android:textSize="24sp"
+                        android:textStyle="bold"
+                        tools:text="顺序播放" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="@string/settings_playback_desc"
+                        android:textColor="@color/text_tertiary"
+                        android:textSize="15sp" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/btn_playback_mode"
+                    style="@style/TextAction"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="20dp"
+                    android:text="@string/action_change" />
+            </LinearLayout>
+
+            <!-- ============ 接收服务 ============ -->
+            <TextView
+                style="@style/SectionTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:text="@string/settings_service_section" />
+
+            <!--
+              接收服务列表。
+              用普通 LinearLayout 而不是 RecyclerView：这里固定就两行、整页在
+              ScrollView 里滚动、列表自身不需滚动与复用。而 `wrap_content` 的
+              RecyclerView 嵌在 ScrollView 里时**测量只按一个条目的高度收敛**
+              （实测只渲染出一个模块），换成 LinearLayout 这类问题根本不存在。
+            -->
+            <LinearLayout
+                android:id="@+id/ll_modules"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:drawablePadding="8dp"
+                android:text="@string/settings_service_warning"
+                android:textColor="@color/state_warn"
+                android:textSize="15sp" />
+
+            <!-- ============ 网络信息 ============ -->
+            <TextView
+                style="@style/SectionTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:text="@string/settings_network_section" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_card"
+                android:orientation="vertical"
+                android:padding="22dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/home_ip"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="17sp" />
+
+                    <TextView
+                        android:id="@+id/tv_ip"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/text_primary"
+                        android:textSize="17sp"
+                        tools:text="192.168.10.205" />
+                </LinearLayout>
+
+                <!--
+                  不再在这里列一个"服务端口"：多协议并存时各模块端口不同
+                  （DLNA 用系统分配的空闲端口、AirPlay 用 7000），
+                  只显示其中一个会让排查的人以为那就是全部。
+                  各自的监听端口改到上方「接收服务」的每个模块行里展示。
+                -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/settings_network_hint"
+                    android:textColor="@color/text_tertiary"
+                    android:textSize="15sp" />
+            </LinearLayout>
+
+            <!-- ============ 运行日志（默认收起） ============ -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    style="@style/SectionTitle"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="@string/settings_log_section" />
+
+                <TextView
+                    android:id="@+id/btn_toggle_log"
+                    style="@style/TextAction"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/settings_log_show" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/ll_log"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone"
+                tools:visibility="visible">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="10dp"
+                    android:text="@string/settings_log_desc"
+                    android:textColor="@color/text_tertiary"
+                    android:textSize="15sp" />
+
+                <TextView
+                    android:id="@+id/tv_log"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_card"
+                    android:fontFamily="monospace"
+                    android:lineSpacingExtra="3dp"
+                    android:maxLines="400"
+                    android:padding="18dp"
+                    android:text="@string/log_empty"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/btn_clear_log"
+                    style="@style/TextAction"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="end"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/action_clear_log" />
+            </LinearLayout>
+
+            <!-- ============ 关于 ============ -->
+            <TextView
+                style="@style/SectionTitle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:text="@string/settings_about_section" />
+
+            <!--
+              检查更新。放在「关于」里而不是单开一区：设置页在电视上已经要滚动好几屏，
+              版本相关的东西聚在一处更好找，也少一次滚动。
+              整行可点 —— 电视遥控器只有一个焦点，让整行承载比只让右侧小字承载好操作。
+            -->
+            <LinearLayout
+                android:id="@+id/row_check_update"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_card_focusable"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="22dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/settings_update_row_title"
+                        android:textColor="@color/text_primary"
+                        android:textSize="24sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="@string/settings_update_row_desc"
+                        android:textColor="@color/text_tertiary"
+                        android:textSize="15sp" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/btn_check_update"
+                    style="@style/TextAction"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="20dp"
+                    android:text="@string/action_check_update" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tv_version"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:textColor="@color/text_secondary"
+                android:textSize="17sp"
+                tools:text="CastHub 1.2.1（构建 9）" />
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

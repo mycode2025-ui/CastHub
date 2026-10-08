@@ -1,0 +1,36 @@
+# ───────────────────────── Gradle / 构建产物 ─────────────────────────
+.gradle/
+build/
+**/build/
+.externalNativeBuild/
+.cxx/
+captures/
+local.properties
+
+# ───────────────────────── 签名材料：绝不入库 ─────────────────────────
+#
+# 发布私钥一旦入过库就作废了（历史里删不干净），任何人都能伪造同签名包。
+# 需要构建正式包时把 keystore 与 keystore.properties 放到仓库根目录即可；
+# 二者缺失时 assembleRelease 会退回 debug 签名（见 app/build.gradle.kts）。
+*.jks
+*.keystore
+keystore.properties
+
+# ───────────────────────── IDE ─────────────────────────
+.idea/
+*.iml
+*.iws
+*.hprof
+.vscode/
+
+# ───────────────────────── 系统 ─────────────────────────
+.DS_Store
+Thumbs.db
+*.log
+
+# ───────────────────────── 项目内 ─────────────────────────
+# 待发布的构建产物（由 GitHub / Gitee 的 Release 承载，不入库）
+/dist/
+# 本地测试用的媒体样本与截图（体积大、可再生成）
+/_testmedia/
+/_shots/

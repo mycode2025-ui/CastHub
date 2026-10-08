@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  待机页 · 怎么投屏：面向第一次使用的人的引导卡片。
+
+  窄屏时它排在「支持的投屏方式」下面（整宽）；
+  电视上则移到右侧一列 —— 480dp 高的电视可视区装不下"身份区 + 支持方式 + 引导卡片"
+  竖着排（18sp 正文的 10-foot 下限算下来要 ~400dp），横着放才装得进一屏。
+
+  ⚠️ 上间距由**引用它的 include 标签**给（`android:layout_marginTop`），不写在这里：
+  `<include>` 上一旦写了 `layout_width` / `layout_height`，被包含根布局自己的
+  `layout_*` 属性会被整体顶掉 —— 实测这个 marginTop 就是这样丢的（间距变成 0px）。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/home_guide"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_card"
+    android:orientation="vertical"
+    android:padding="@dimen/guide_padding">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/home_howto_title"
+        android:textColor="@color/text_primary"
+        android:textSize="@dimen/guide_title_text"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:lineSpacingExtra="5dp"
+        android:text="@string/home_howto_body"
+        android:textColor="@color/text_secondary"
+        android:textSize="@dimen/guide_body_text" />
+</LinearLayout>

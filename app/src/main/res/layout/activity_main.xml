@@ -1,0 +1,260 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  主页（待机屏 / 投屏播放），窄屏（手机、竖屏）。
+
+  ┌─ video_layer（底层，常驻）── SurfaceView + OSD 浮层
+  └─ home_root  （上层，待机屏）─ 顶栏 + 可滚动内容 + 底部网络信息
+
+  视频层始终存在而不是播放时才创建，可保证 Surface 一直有效，
+  避免"收到投屏时才建表面"导致的时序问题；待机时它被上层完全遮住。
+
+  内容区由三块 include 组成（home_identity / home_support / home_guide），
+  这里竖着排；宽屏（电视、横屏手机）见 **layout-w600dp/activity_main.xml** ——
+  那里把「怎么投屏」移到右侧一列，否则 480dp 高的电视可视区装不下一屏。
+  两个文件共用同一批 include，内容只写一份。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_root"
+    tools:context=".MainActivity">
+
+    <!-- ==================== 底层：视频输出 ==================== -->
+    <FrameLayout
+        android:id="@+id/video_layer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000">
+
+        <SurfaceView
+            android:id="@+id/surface_view"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <!--
+          投屏信息浮层（OSD）。投屏开始时短暂出现后自动淡出；
+          之后按遥控器返回键或点击画面可再次唤出。
+          接收端不能替代手机端的播放控制，所以这里只展示信息、不做控制。
+        -->
+        <LinearLayout
+            android:id="@+id/osd_panel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top"
+            android:background="@color/bg_scrim"
+            android:orientation="vertical"
+            android:paddingStart="40dp"
+            android:paddingTop="28dp"
+            android:paddingEnd="40dp"
+            android:paddingBottom="28dp"
+            android:visibility="gone"
+            tools:visibility="visible">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/osd_casting"
+                android:textColor="@color/state_ok"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tv_osd_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:textColor="@color/text_primary"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                tools:text="百变校巴 第十四季 第1集.mp4" />
+
+            <TextView
+                android:id="@+id/tv_osd_source"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="@color/text_secondary"
+                android:textSize="16sp"
+                tools:text="来自 Xiaomi 25113PN0EC" />
+
+            <!--
+              播放进度条。快进/快退时用户最需要看的就是它 ——
+              只有数字（"快进 10 秒"）不够直观，看不出"跳到哪儿了、还剩多少"。
+              max 取 1000 是为了用整数表达千分比，避免浮点误差。
+            -->
+            <ProgressBar
+                android:id="@+id/pb_osd_progress"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="8dp"
+                android:layout_marginTop="18dp"
+                android:max="1000"
+                android:progress="0"
+                android:progressDrawable="@drawable/progress_horizontal" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/tv_osd_position"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:textColor="@color/text_primary"
+                    android:textSize="16sp"
+                    tools:text="01:23" />
+
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <TextView
+                    android:id="@+id/tv_osd_duration"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:textColor="@color/text_tertiary"
+                    android:textSize="16sp"
+                    tools:text="13:05" />
+            </LinearLayout>
+
+            <!-- 平时显示遥控器操作提示；快进/快退时临时改为此动作的反馈 -->
+            <TextView
+                android:id="@+id/tv_osd_hint"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="@string/osd_hint_keys"
+                android:textColor="@color/text_tertiary"
+                android:textSize="14sp" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- ==================== 上层：待机欢迎屏 ==================== -->
+    <LinearLayout
+        android:id="@+id/home_root"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/bg_root"
+        android:orientation="vertical">
+
+        <!-- 顶栏：设置入口固定在右上角 -->
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingStart="@dimen/home_margin"
+            android:paddingTop="24dp"
+            android:paddingEnd="@dimen/home_margin">
+
+            <TextView
+                android:id="@+id/btn_settings"
+                style="@style/TextAction"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="end"
+                android:drawableStart="@drawable/ic_settings"
+                android:drawablePadding="10dp"
+                android:text="@string/home_settings" />
+        </FrameLayout>
+
+        <!--
+          滚动容器不参与焦点（它没有焦点视觉，用户会以为遥控器坏了）；
+          焦点直接落在内部真正的可交互元素上，移出可视区时容器仍会自动滚动。
+
+          注意：ScrollView 在 initScrollView() 里硬编码 setFocusable(true)，
+          会把这里的 android:focusable="false" 覆盖掉，必须在代码里再关一次
+          （见 MainActivity.bindViews）。
+
+          ⚠️ 所以这一页**必须靠"内容装得进一屏"来保证可用**：
+          遥控器没有可聚焦元素就滚不动这一页。窄屏靠触摸可滚，
+          电视上则靠 layout-w600dp 的双列版式把高度压到一屏之内。
+        -->
+        <ScrollView
+            android:id="@+id/home_scroll"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:fillViewport="true"
+            android:focusable="false"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_horizontal|center_vertical"
+                android:orientation="vertical"
+                android:paddingStart="@dimen/home_margin"
+                android:paddingEnd="@dimen/home_margin"
+                android:paddingBottom="24dp">
+
+                <include
+                    layout="@layout/home_identity"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content" />
+
+                <include
+                    layout="@layout/home_support"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content" />
+
+                <include
+                    layout="@layout/home_guide"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="@dimen/hero_guide_top" />
+            </LinearLayout>
+        </ScrollView>
+
+        <!--
+          底部：网络信息。介于"有用"和"不干扰"之间，放弱色小字。
+
+          这里**只显示本机 IP，不显示端口**：多协议并存时两个模块的端口并不相同
+          （DLNA 用系统分配的空闲端口、AirPlay 用 7000），只挑一个显示会误导排查的人。
+          各模块自己的监听端口在设置页按模块分别列出。
+        -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:orientation="horizontal"
+            android:paddingStart="@dimen/home_margin"
+            android:paddingTop="14dp"
+            android:paddingEnd="@dimen/home_margin"
+            android:paddingBottom="20dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/home_ip"
+                android:textColor="@color/text_tertiary"
+                android:textSize="14sp" />
+
+            <TextView
+                android:id="@+id/tv_ip"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:textColor="@color/text_secondary"
+                android:textSize="14sp"
+                tools:text="192.168.10.205" />
+
+            <TextView
+                android:id="@+id/tv_version"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="24dp"
+                android:textColor="@color/text_tertiary"
+                android:textSize="14sp"
+                tools:text="v1.2.1" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

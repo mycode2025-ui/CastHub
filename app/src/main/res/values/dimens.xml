@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  窄屏（手机、竖屏）：内容边距 24dp，尽量用满可用宽度。
+ 宽屏（电视、横屏）见 values-w600dp —— 那里会加大边距并压缩待机页的纵向节奏。
+
+  待机页的 all 尺寸都提到这里，而不是写死在布局里：
+  同一份 home_identity / home_support / home_guide 要在两种屏幕上都好看，
+  唯一能让它们"尺寸不同、结构相同"的办法就是把尺寸做成资源。
+-->
+<resources>
+    <dimen name="content_margin">24dp</dimen>
+
+    <!-- ============ 待机页 · 内容区 ============ -->
+    <!-- 待机页自己的左右边距：宽屏上要留出两列，用 160dp 会把列挤得太窄 -->
+    <dimen name="home_margin">24dp</dimen>
+    <!-- 两列之间的间距（只有宽屏版式会用到） -->
+    <dimen name="home_column_gap">24dp</dimen>
+
+    <!-- ============ 待机页 · 身份区 ============ -->
+    <dimen name="hero_top">8dp</dimen>
+    <dimen name="hero_badge_size">92dp</dimen>
+    <dimen name="hero_badge_icon">50dp</dimen>
+    <dimen name="hero_name_top">22dp</dimen>
+    <!-- 设备名 44sp：用户要拿着手机在此核对，是整屏最醒目的元素 -->
+    <dimen name="hero_name_text">44sp</dimen>
+    <dimen name="hero_name_min">26sp</dimen>
+    <dimen name="hero_name_max">48sp</dimen>
+    <dimen name="hero_hint_top">10dp</dimen>
+    <dimen name="hero_hint_text">18sp</dimen>
+    <dimen name="hero_status_top">22dp</dimen>
+    <dimen name="hero_status_text">18sp</dimen>
+
+    <!-- ============ 待机页 · 支持的投屏方式 ============ -->
+    <dimen name="hero_support_top">20dp</dimen>
+    <dimen name="hero_chip_text">16sp</dimen>
+
+    <!-- ============ 待机页 · 怎么投屏 ============ -->
+    <dimen name="hero_guide_top">24dp</dimen>
+    <dimen name="guide_padding">24dp</dimen>
+    <dimen name="guide_title_text">20sp</dimen>
+    <dimen name="guide_body_text">17sp</dimen>
+</resources>

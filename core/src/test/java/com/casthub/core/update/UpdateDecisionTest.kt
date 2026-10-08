@@ -1,0 +1,189 @@
+package com.casthub.core.update
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class UpdateDecisionTest {
+
+    private val current = Version.parseOrNull("1.4.0")!!
+
+    private fun rel(source: UpdateSource, tag: String, apk: String? = null) = ReleaseInfo(
+        source = source,
+        tag = tag,
+        version = Version.parseOrNull(tag)!!,
+        title = tag,
+        notes = "",
+        pageUrl = "https://example.com/$tag",
+        apk = apk?.let { ReleaseAsset("CastHub-$tag.apk", it, 1024L) },
+    )
+
+    /**
+     * 测试内的便捷入口。刻意不叫 `decide` —— 与待测的顶层函数同名会遮蔽它，
+     * 后面的调用到底进了哪一个是靠重载决议猜的，读起来不可靠。
+     */
+    private fun decideWith(vararg outcomes: SourceOutcome) = decide(
+        outcomes = outcomes.toList(),
+        current = current,
+        currentVersionName = "1.4.0",
+    )
+
+    @Test
+    fun `两站都有新版本时取版本更高的那个`() {
+        val result = decideWith(
+            SourceOutcome(UpdateSource.GITEE, listOf(rel(UpdateSource.GITEE, "v1.4.1"))),
+            SourceOutcome(UpdateSource.GITHUB, listOf(rel(UpdateSource.GITHUB, "v1.5.0"))),
+        )
+        result as UpdateCheckResult.UpdateAvailable
+        assertEquals("v1.5.0", result.candidate.release.tag)
+        assertEquals(UpdateSource.GITHUB, result.candidate.release.source)
+    }
+
+    @Test
+    fun `Gitee 更靠前时选 Gitee`() {
+        val result = decideWith(
+            SourceOutcome(UpdateSource.GITEE, listOf(rel(UpdateSource.GITEE, "v1.6.0"))),
+            SourceOutcome(UpdateSource.GITHUB, listOf(rel(UpdateSource.GITHUB, "v1.5.0"))),
+        )
+        result as UpdateCheckResult.UpdateAvailable
+        assertEquals(UpdateSource.GITEE, result.candidate.release.source)
+    }
+
+    @Test
+    fun `同一个源里取最高版本而不是第一条`() {
+        // 两站列表都按发布时间倒序，热修复版本可能排在后面
+        val result = decideWith(
+            SourceOutcome(
+                UpdateSource.GITHUB,
+                listOf(
+                    rel(UpdateSource.GITHUB, "v1.5.0"),
+                    rel(UpdateSource.GITHUB, "v1.6.0"),
+                    rel(UpdateSource.GITHUB, "v1.4.9"),
+                ),
+            ),
+        )
+        result as UpdateCheckResult.UpdateAvailable
+        assertEquals("v1.6.0", result.candidate.release.tag)
+    }
+
+    @Test
+    fun `远端与本地同版本时判为已是最新`() {
+        val result = decideWith(
+            SourceOutcome(UpdateSource.GITEE, listOf(rel(UpdateSource.GITEE, "v1.4.0"))),
+            SourceOutcome(UpdateSource.GITHUB, listOf(rel(UpdateSource.GITHUB, "v1.4.0"))),
+        )
+        assertTrue(result is UpdateCheckResult.UpToDate)
+        assertEquals("v1.4.0", (result as UpdateCheckResult.UpToDate).latestTag)
+    }
+
+    @Test
+    fun `本地比远端新时（开发版）不提示升级`() {
+        val result = decideWith(
+            SourceOutcome(UpdateSource.GITEE, listOf(rel(UpdateSource.GITEE, "v1.3.9"))),
+            SourceOutcome(UpdateSource.GITHUB, listOf(rel(UpdateSource.GITHUB, "v1.3.8"))),
+        )
+        assertTrue(result is UpdateCheckResult.UpToDate)
+    }
+
+    @Test
+    fun `一个源失败时仍要出结论 但必须带上告警`() {
+        // 否则一句"已是最新"可能是错的：另一个源上也许有更新的版本没取到
+        val result = decideWith(
+            SourceOutcome(UpdateSource.GITEE, listOf(rel(UpdateSource.GITEE, "v1.4.0"))),
+            SourceOutcome(UpdateSource.GITHUB, error = "连接超时"),
+        )
+        assertTrue(result is UpdateCheckResult.UpToDate)
+        val warnings = result.warnings
+        assertEquals(1, warnings.size)
+        assertTrue(warnings.first().contains("GitHub"))
+        assertTrue(warnings.first().contains("连接超时"))
+    }
+
+    @Test
+    fun `一个源失败时另一源发现的更新照常提示`() {
+        val result = decideWith(
+            SourceOutcome(UpdateSource.GITEE, listOf(rel(UpdateSource.GITEE, "v1.5.0"))),
+            SourceOutcome(UpdateSource.GITHUB, error = "访问受限（403）"),
+        )
+        result as UpdateCheckResult.UpdateAvailable
+        assertEquals("v1.5.0", result.candidate.release.tag)
+        assertEquals(1, result.warnings.size)
+    }
+
+    @Test
+    fun `两个源都失败时报错 且两边的失败原因都要带出来`() {
+        val result = decideWith(
+            SourceOutcome(UpdateSource.GITEE, error = "连接超时"),
+            SourceOutcome(UpdateSource.GITHUB, error = "域名解析失败，请检查网络"),
+        )
+        result as UpdateCheckResult.Failed
+        assertTrue(result.message.contains("Gitee"))
+        assertTrue(result.message.contains("连接超时"))
+        assertTrue(result.message.contains("GitHub"))
+        assertTrue(result.message.contains("域名解析失败"))
+    }
+
+    @Test
+    fun `两站都取到但都还没发布过版本时算已是最新`() {
+        val result = decideWith(
+            SourceOutcome(UpdateSource.GITEE, emptyList()),
+            SourceOutcome(UpdateSource.GITHUB, emptyList()),
+        )
+        assertTrue(result is UpdateCheckResult.UpToDate)
+        assertNull((result as UpdateCheckResult.UpToDate).latestTag)
+    }
+
+    @Test
+    fun `最优版本没挂 APK 时可以从另一个源取同版本的包`() {
+        // 两站 Release 常不同步：Gitee 发了版本但没挂包、GitHub 挂了包。
+        // 若坚持版本与包必须同源，就会出现"明明有包却只能跳网页"。
+        val result = decideWith(
+            SourceOutcome(UpdateSource.GITEE, listOf(rel(UpdateSource.GITEE, "v1.5.0"))),
+            SourceOutcome(
+                UpdateSource.GITHUB,
+                listOf(rel(UpdateSource.GITHUB, "v1.5.0", apk = "https://github.com/a/pkg.apk")),
+            ),
+        )
+        result as UpdateCheckResult.UpdateAvailable
+        assertEquals("v1.5.0", result.candidate.release.tag)
+        assertEquals("https://github.com/a/pkg.apk", result.candidate.apkUrl)
+        assertEquals(UpdateSource.GITHUB, result.candidate.apkSource)
+    }
+
+    @Test
+    fun `同源有包时不动用另一源的包`() {
+        val result = decideWith(
+            SourceOutcome(
+                UpdateSource.GITEE,
+                listOf(rel(UpdateSource.GITEE, "v1.5.0", apk = "https://gitee.com/a/pkg.apk")),
+            ),
+            SourceOutcome(
+                UpdateSource.GITHUB,
+                listOf(rel(UpdateSource.GITHUB, "v1.5.0", apk = "https://github.com/a/pkg.apk")),
+            ),
+        )
+        result as UpdateCheckResult.UpdateAvailable
+        assertEquals("https://gitee.com/a/pkg.apk", result.candidate.apkUrl)
+    }
+
+    @Test
+    fun `两站都没挂 APK 时 apkUrl 为 null —— 由界面引导去 Release 页`() {
+        val result = decideWith(
+            SourceOutcome(UpdateSource.GITEE, listOf(rel(UpdateSource.GITEE, "v1.5.0"))),
+            SourceOutcome(UpdateSource.GITHUB, listOf(rel(UpdateSource.GITHUB, "v1.5.0"))),
+        )
+        result as UpdateCheckResult.UpdateAvailable
+        assertNull(result.candidate.apkUrl)
+        assertNull(result.candidate.apkSource)
+    }
+
+    @Test
+    fun `不带 v 前缀的 tag 一样能比较`() {
+        val result = decideWith(
+            SourceOutcome(UpdateSource.GITHUB, listOf(rel(UpdateSource.GITHUB, "1.4.1"))),
+        )
+        result as UpdateCheckResult.UpdateAvailable
+        assertEquals("1.4.1", result.candidate.release.tag)
+    }
+}

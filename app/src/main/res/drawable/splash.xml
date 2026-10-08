@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  启动画面（冷启动窗口背景）。
+
+  为什么需要它：Activity 首帧画出来之前，系统先把窗口背景铺满屏幕。
+  主题里若只给一个**纯色**，用户看到的就是一片漆黑 —— 启动越慢，"黑屏"越明显。
+
+  这里不用 Android 12+ 的 SplashScreen API（minSdk 23 覆盖不到），而是直接给
+  `android:windowBackground` 一个 layer-list：从 Android 6.0 起生效，
+  且**不新增 Activity、不延长启动流程** —— 背景由系统在首帧之前绘制，
+  首帧出来后自动被内容覆盖，不会多停留一屏。
+
+  图标用已有的白色投屏矢量图，靠 `android:width/height` 放大（该属性自 API 23 起支持）。
+  刻意不引用 `@mipmap/ic_launcher`：v26 起它会被解析成自适应图标 XML，
+  `<bitmap>` 无法 inflate。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item android:drawable="@color/bg_root" />
+
+    <item
+        android:width="120dp"
+        android:height="120dp"
+        android:drawable="@drawable/ic_cast"
+        android:gravity="center" />
+</layer-list>
