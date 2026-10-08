@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.Surface
 import android.view.SurfaceHolder
@@ -13,6 +14,7 @@ import android.view.SurfaceView
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -27,6 +29,7 @@ import com.casthub.core.CastSession
 import com.casthub.core.LocalPlaybackControl
 import com.casthub.core.ProtocolModule
 import com.casthub.core.VideoOutput
+import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 /**
@@ -67,6 +70,29 @@ class MainActivity : AppCompatActivity() {
 
     /** 当前是否处于投屏播放态。 */
     private var isCasting = false
+
+    /** 当前视频应有的宽高比（宽 ÷ 高）；0 表示未知，按铺满处理。 */
+    private var videoAspect = 0f
+
+    /** [aspectProbe] 已尝试的次数，用来给轮询封顶。 */
+    private var aspectProbeAttempts = 0
+
+    /**
+     * 起播后短时间内轮询画面比例。
+     *
+     * 解码器要等第一个视频帧解析完（几十到几百毫秒）才知道画面尺寸，而会话状态流
+     * 每秒才推一次 —— 只靠它收敛的话，竖屏内容会先被拉伸约 1 秒再纠正，肉眼可见。
+     * 这里在起播后 3 秒内以 200ms 为间隔收敛，拿到比例就立刻停。
+     */
+    private val aspectProbe = object : Runnable {
+        override fun run() {
+            if (!isCasting) return
+            syncVideoAspect()
+            if (videoAspect <= 0f && aspectProbeAttempts++ < ASPECT_PROBE_MAX) {
+                osdHandler.postDelayed(this, ASPECT_PROBE_INTERVAL_MS)
+            }
+        }
+    }
 
     private val osdHandler = Handler(Looper.getMainLooper())
     private val osdHideRunnable = Runnable { hideOsd() }
@@ -175,6 +201,86 @@ class MainActivity : AppCompatActivity() {
         // ScrollView 在 initScrollView() 里硬编码 setFocusable(true)，
         // 会覆盖 XML 上的 android:focusable="false"，这里再关一次
         findViewById<android.widget.ScrollView>(R.id.home_scroll).isFocusable = false
+
+        // 屏幕尺寸变化（横竖屏切换、电视分辨率切换）后要重新按比例摆放视频表面。
+        // 监听的是"尺寸真的变了"，避免每次布局都做一遍无用功。
+        videoLayer.addOnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+            if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
+                relayoutVideoSurface()
+            }
+        }
+    }
+
+    // ─────────────────────── 视频画面比例 ───────────────────────
+
+    /**
+     * 按视频的宽高比给 Surface 定尺寸，保持比例、居中，四周留黑边。
+     *
+     * 为什么比例必须由布局这一侧来管：ExoPlayer 输出到一块**裸 Surface** 时，
+     * 画面会被**非等比拉伸**去填满它 —— 实测把 720×1280 的竖屏视频投到
+     * 1920×1080 的横屏电视，画面被打成 1920×1017，测试素材里那个 400×400 的
+     * 正方形标记被拉成 1066×317（横向是正确比例的 3.36 倍），人像明显发胖。
+     *
+     * 做法是把 Surface 本身调成视频的形状，而不是去设 `Surface.setVideoScalingMode`：
+     * 后者依赖解码器实现，各厂商差异很大（模拟器的软解就完全没照做）。
+     * 尺寸对了，无论解码器怎么缩放，出来的形状都是对的。
+     *
+     * 代价是竖屏内容在横屏电视上会居中显示、左右留大片黑边（1080 高只占 607px 宽）——
+     * 这是**正确**的结果：另一种选择是裁掉上下把画面填满，但那会丢内容。
+     */
+    private fun relayoutVideoSurface() {
+        val containerW = videoLayer.width
+        val containerH = videoLayer.height
+        if (containerW <= 0 || containerH <= 0) return
+
+        val targetW: Int
+        val targetH: Int
+        if (videoAspect <= 0f) {
+            targetW = containerW
+            targetH = containerH
+        } else {
+            val containerAspect = containerW.toFloat() / containerH
+            if (videoAspect > containerAspect) {
+                // 视频比屏幕更宽：以宽为准，上下留黑边
+                targetW = containerW
+                targetH = (containerW / videoAspect).roundToInt()
+            } else {
+                // 视频比屏幕更高（竖屏）：以高为准，左右留黑边
+                targetW = (containerH * videoAspect).roundToInt()
+                targetH = containerH
+            }
+        }
+
+        val current = surfaceView.layoutParams as? FrameLayout.LayoutParams
+        if (current != null && current.width == targetW && current.height == targetH) return
+        surfaceView.layoutParams =
+            FrameLayout.LayoutParams(targetW, targetH, Gravity.CENTER)
+    }
+
+    /** 从各模块读当前画面的宽高比；变化时才重新摆放。 */
+    private fun syncVideoAspect() {
+        val ratio = app.modules.firstNotNullOfOrNull { module ->
+            (module as? VideoOutput)?.videoAspectRatio()?.takeIf { it > 0f }
+        } ?: 0f
+        if (ratio == videoAspect) return
+        videoAspect = ratio
+        relayoutVideoSurface()
+    }
+
+    /** 起播时发动比例轮询（见 [aspectProbe]）。 */
+    private fun watchVideoAspect() {
+        osdHandler.removeCallbacks(aspectProbe)
+        aspectProbeAttempts = 0
+        osdHandler.post(aspectProbe)
+    }
+
+    /** 停止轮询并把表面恢复成铺满，供下一次投屏从干净状态开始。 */
+    private fun stopWatchingVideoAspect() {
+        osdHandler.removeCallbacks(aspectProbe)
+        if (videoAspect != 0f) {
+            videoAspect = 0f
+            relayoutVideoSurface()
+        }
     }
 
     private fun setupSurface() {
@@ -316,6 +422,8 @@ class MainActivity : AppCompatActivity() {
             // 会话状态每秒推送一次，顺便让进度条跟着走。
             // 只在浮层可见时刷新，看不见的时候不做无用功。
             if (osdPanel.visibility == View.VISIBLE) updateProgress()
+            // 起播阶段由 aspectProbe 收敛；这里兜住"中途换源、分辨率变了"的情况
+            syncVideoAspect()
         }
     }
 
@@ -343,7 +451,10 @@ class MainActivity : AppCompatActivity() {
             // 上一次投屏残留的"再按一次"计时不能带进新会话，否则进来第一下返回键就退出了
             lastExitPressMs = 0L
             exitGraceUntilMs = 0L
+            // 画面比例要等解码器报出尺寸才知道，起播阶段主动收敛
+            watchVideoAspect()
         } else {
+            stopWatchingVideoAspect()
             // 结束投屏后**延迟**关闭回调，给紧随其后的返回键留出宽限期（见 backCallback）。
             // 立即关闭会让那一次按键落到默认处理，把应用一起关掉。
             osdHandler.postDelayed({
@@ -612,5 +723,9 @@ class MainActivity : AppCompatActivity() {
 
         /** 进度条的满量程。用千分比整数即可，避免浮点误差。 */
         private const val PROGRESS_MAX = 1000
+
+        /** 起播后收敛画面比例的轮询间隔与上限（200ms × 15 ≈ 3 秒）。 */
+        private const val ASPECT_PROBE_INTERVAL_MS = 200L
+        private const val ASPECT_PROBE_MAX = 15
     }
 }

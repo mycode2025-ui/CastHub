@@ -8,6 +8,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -15,6 +16,7 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.casthub.core.CastLogger
 import com.casthub.core.PlaybackState
+import com.casthub.core.VideoAspect
 
 /**
  * AirPlay 的播放执行器。
@@ -55,6 +57,10 @@ internal class AirPlayPlayer(private val context: Context) {
 
     @Volatile
     private var lastEnded = false
+
+    /** 画面应有宽高比（宽 ÷ 高），未知为 0。界面拿它给 Surface 定尺寸。 */
+    @Volatile
+    private var lastAspectRatio: Float = 0f
 
     /** 状态变化回调（在主线程触发）。 */
     var onStateChanged: (() -> Unit)? = null
@@ -139,6 +145,26 @@ internal class AirPlayPlayer(private val context: Context) {
                         stopSampling()
                         onError?.invoke(error.message ?: "播放失败")
                     }
+
+                    /**
+                     * 记下画面宽高比交给界面。裸 Surface 上画面会被非等比拉伸填满
+                     * （见 `VideoOutput.videoAspectRatio`），所以必须让界面
+                     * 把 Surface 调成视频的形状。
+                     */
+                    override fun onVideoSizeChanged(videoSize: VideoSize) {
+                        lastAspectRatio = VideoAspect.of(
+                            width = videoSize.width,
+                            height = videoSize.height,
+                            pixelWidthHeightRatio = videoSize.pixelWidthHeightRatio,
+                            unappliedRotationDegrees = videoSize.unappliedRotationDegrees,
+                        )
+                        CastLogger.i(
+                            TAG,
+                            "画面尺寸 ${videoSize.width}x${videoSize.height}" +
+                                "（旋转 ${videoSize.unappliedRotationDegrees}°）→ 宽高比 " +
+                                "%.4f".format(java.util.Locale.US, lastAspectRatio),
+                        )
+                    }
                 })
                 setVideoSurface(surface)
                 playWhenReady = true
@@ -199,6 +225,8 @@ internal class AirPlayPlayer(private val context: Context) {
         lastPlaying = false
         lastReady = false
         lastEnded = false
+        // 清掉宽高比，否则下一段内容的画面会先按上一段的形状显示
+        lastAspectRatio = 0f
         onStateChanged?.invoke()
     }
 
@@ -226,6 +254,9 @@ internal class AirPlayPlayer(private val context: Context) {
 
     fun durationMs(): Long = lastDurationMs
     fun positionMs(): Long = lastPositionMs
+
+    /** 画面应有宽高比（宽 ÷ 高）；未知返回 0，由界面按铺满处理。 */
+    fun videoAspectRatio(): Float = lastAspectRatio
 
     private fun startSampling() {
         mainHandler.removeCallbacks(sampler)

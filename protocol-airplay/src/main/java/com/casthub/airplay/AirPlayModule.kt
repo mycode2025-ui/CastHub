@@ -210,6 +210,8 @@ class AirPlayModule(private val appContext: Context) :
         player?.setSurface(surface)
     }
 
+    override fun videoAspectRatio(): Float = player?.videoAspectRatio() ?: 0f
+
     fun shutdown() {
         moduleScope.cancel()
     }

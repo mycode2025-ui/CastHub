@@ -9,6 +9,7 @@ import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -18,6 +19,7 @@ import com.casthub.core.CastLogger
 import com.casthub.core.MediaInfo
 import com.casthub.core.PlaybackPosition
 import com.casthub.core.PlaybackState
+import com.casthub.core.VideoAspect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -71,6 +73,15 @@ class MediaRendererController(
 
     @Volatile
     private var cachedDurationMs: Long = -1L
+
+    /**
+     * 当前画面应有的宽高比（宽 ÷ 高），未知为 0。
+     *
+     * 由播放器回调写入、界面读取，所以用 `@Volatile` —— 界面在主线程、
+     * 写入也在主线程，但这个字段可能被 attachSurface 等路径提前读。
+     */
+    @Volatile
+    private var cachedAspectRatio: Float = 0f
 
     @Volatile
     var state: PlaybackState = PlaybackState.IDLE
@@ -130,6 +141,8 @@ class MediaRendererController(
             currentMedia = null
             cachedDurationMs = -1L
             cachedPositionMs = 0L
+            // 清掉宽高比，否则下一段内容的画面会先按上一段的形状显示
+            cachedAspectRatio = 0f
             updateState(PlaybackState.STOPPED)
         }
     }
@@ -163,6 +176,9 @@ class MediaRendererController(
 
     /** 时长（毫秒），未知返回 0。 */
     fun duration(): Long = if (cachedDurationMs > 0) cachedDurationMs else 0L
+
+    /** 画面应有宽高比（宽 ÷ 高）；未知返回 0，由界面按铺满处理。 */
+    fun videoAspectRatio(): Float = cachedAspectRatio
 
     fun currentPosition(): PlaybackPosition =
         PlaybackPosition(cachedPositionMs, duration(), state)
@@ -282,6 +298,25 @@ class MediaRendererController(
                     else -> PlaybackState.PAUSED
                 }
                 if (mapped != state) updateState(mapped)
+            }
+
+            /**
+             * 记下画面宽高比交给界面。界面拿它给 Surface 定尺寸 ——
+             * 直接输出到裸 Surface 时画面会被非等比拉伸填满（见 VideoOutput.videoAspectRatio）。
+             */
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                cachedAspectRatio = VideoAspect.of(
+                    width = videoSize.width,
+                    height = videoSize.height,
+                    pixelWidthHeightRatio = videoSize.pixelWidthHeightRatio,
+                    unappliedRotationDegrees = videoSize.unappliedRotationDegrees,
+                )
+                CastLogger.i(
+                    TAG,
+                    "画面尺寸 ${videoSize.width}x${videoSize.height}" +
+                        "（旋转 ${videoSize.unappliedRotationDegrees}°）→ 宽高比 " +
+                        "%.4f".format(java.util.Locale.US, cachedAspectRatio),
+                )
             }
 
             override fun onPlayerError(error: PlaybackException) {

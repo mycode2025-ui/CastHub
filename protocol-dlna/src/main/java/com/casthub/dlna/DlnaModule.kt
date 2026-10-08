@@ -246,6 +246,8 @@ class DlnaModule(private val appContext: Context) : ProtocolModule, VideoOutput,
         controller?.attachSurface(surface)
     }
 
+    override fun videoAspectRatio(): Float = controller?.videoAspectRatio() ?: 0f
+
     // ─────────────────────── SENDER (DMC) ───────────────────────
 
     /**
